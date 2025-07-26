@@ -8,4 +8,8 @@ pub enum ErrorCode {
     MarketUninitialized,
     #[msg("Insufficient collateral")]
     InsufficientCollateral,
+    #[msg("Orderbook overflow")]
+    OrderbookOverflow,
+    #[msg("Price deviation too large")]
+    PriceDeviation,
 }

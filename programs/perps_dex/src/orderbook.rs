@@ -1,9 +1,8 @@
 use crate::state::Side;
 use anchor_lang::prelude::*;
 
-
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy)]
 pub struct SlabNode {
     pub prev: u32,
     pub next: u32,
@@ -35,7 +34,6 @@ pub struct Slab {
 impl Slab {
     pub fn new(capacity: usize) -> Self {
         let mut nodes = vec![SlabNode::default(); capacity];
-        
         for i in 0..capacity as u32 {
             nodes[i as usize].next = if i + 1 < capacity as u32 {
                 i + 1
@@ -49,7 +47,7 @@ impl Slab {
             free_head: 0,
         }
     }
-    
+
     fn alloc_node(&mut self) -> Option<u32> {
         let idx = self.free_head;
         if idx == u32::MAX {
@@ -58,7 +56,7 @@ impl Slab {
         self.free_head = self.nodes[idx as usize].next;
         Some(idx)
     }
-   
+
     fn dealloc_node(&mut self, idx: u32) {
         self.nodes[idx as usize] = SlabNode::default();
         self.nodes[idx as usize].next = self.free_head;
@@ -76,7 +74,7 @@ impl Slab {
         let idx = self
             .alloc_node()
             .ok_or_else(|| error!(crate::errors::ErrorCode::OrderbookOverflow))?;
-        
+
         if self.head == u32::MAX {
             self.head = idx;
             let node = &mut self.nodes[idx as usize];
@@ -90,7 +88,7 @@ impl Slab {
             };
             return Ok(idx);
         }
-       
+
         let mut cur = self.head;
         let mut position: (u32, u32) = (u32::MAX, self.head);
         loop {
@@ -100,18 +98,16 @@ impl Slab {
                 Side::Ask => price < cur_node.price,
             };
             if better || (price == cur_node.price && key < cur_node.key) {
-                // Insert before cur
                 position = (cur_node.prev, cur);
                 break;
             }
             if cur_node.next == u32::MAX {
-                // Append after cur
                 position = (cur, u32::MAX);
                 break;
             }
             cur = cur_node.next;
         }
-        
+
         let (prev, next) = position;
         {
             let node = &mut self.nodes[idx as usize];
@@ -133,7 +129,6 @@ impl Slab {
         Ok(idx)
     }
 
-    
     pub fn find_best(&self) -> Option<u32> {
         if self.head == u32::MAX {
             None
@@ -152,7 +147,6 @@ impl Slab {
     }
 
     pub fn remove(&mut self, idx: u32) -> Result<()> {
-        
         let (prev, next) = {
             let node = &self.nodes[idx as usize];
             (node.prev, node.next)
@@ -185,7 +179,7 @@ mod tests {
         let mut slab = Slab::new(4);
         let pk1 = sample_pubkey(1);
         let pk2 = sample_pubkey(2);
-        
+
         let idx1 = slab.insert(1, 100, 10, pk1, Side::Bid).unwrap();
         let idx2 = slab.insert(2, 110, 5, pk2, Side::Bid).unwrap();
         assert_eq!(slab.find_best(), Some(idx2));
@@ -201,7 +195,7 @@ mod tests {
         let mut slab = Slab::new(3);
         let pk1 = sample_pubkey(3);
         let pk2 = sample_pubkey(4);
-        
+
         let idx1 = slab.insert(1, 200, 10, pk1, Side::Ask).unwrap();
         let idx2 = slab.insert(2, 190, 8, pk2, Side::Ask).unwrap();
         assert_eq!(slab.find_best(), Some(idx2));
@@ -211,13 +205,13 @@ mod tests {
     fn test_remove_from_middle() {
         let mut slab = Slab::new(5);
         let pk = sample_pubkey(5);
-        
+
         let idx1 = slab.insert(1, 100, 1, pk, Side::Bid).unwrap();
         let idx2 = slab.insert(2, 90, 1, pk, Side::Bid).unwrap();
         let idx3 = slab.insert(3, 80, 1, pk, Side::Bid).unwrap();
-        
+
         slab.remove(idx2).unwrap();
-        
+
         assert_eq!(slab.head, idx1);
         assert_eq!(slab.nodes[idx1 as usize].next, idx3);
         assert_eq!(slab.nodes[idx3 as usize].prev, idx1);

@@ -1,7 +1,6 @@
 use crate::state::{EventQueue, MarginAccount, Market, OrderbookSide};
 use anchor_lang::prelude::*;
 
-
 #[derive(Accounts)]
 #[instruction(market_nonce: u8, params: crate::state::MarketParams)]
 pub struct InitializeMarket<'info> {
@@ -98,7 +97,7 @@ pub struct Liquidate<'info> {
 
     #[account(mut)]
     pub margin: Account<'info, MarginAccount>,
-    
+
     #[account(mut)]
     pub liquidator: Signer<'info>,
     pub token_program: Program<'info, anchor_spl::token::Token>,

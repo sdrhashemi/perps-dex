@@ -5,20 +5,27 @@ use crate::instructions::{
 use crate::orderbook::Slab;
 use crate::state::{EventQueue, MarginAccount, Market, MarketParams, OrderbookSide, Side};
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Transfer};
+use anchor_lang::AnchorDeserialize;
+use anchor_lang::AnchorSerialize;
 
-/// Decode a Slab from raw bytes storage (stub: alloc fresh slab)
-fn decode_slab(data: &[u8]) -> Result<Slab> {
-    let capacity = data.len() / std::mem::size_of::<crate::orderbook::SlabNode>();
-    Ok(Slab::new(capacity))
+fn decode_slab(data: &[u8], head: u32, free_head: u32) -> Slab {
+    let node_size = std::mem::size_of::<crate::orderbook::SlabNode>();
+    let capacity = data.len() / node_size;
+    let mut slab = Slab::new(capacity);
+    let tmp: Vec<crate::orderbook::SlabNode> =
+        <Vec<crate::orderbook::SlabNode> as AnchorDeserialize>::try_from_slice(data)
+            .unwrap_or_else(|_| vec![crate::orderbook::SlabNode::default(); capacity]);
+    slab.nodes.copy_from_slice(&tmp);
+    slab.head = head;
+    slab.free_head = free_head;
+    slab
 }
 
-/// Encode a Slab back into raw bytes storage (stub)
-fn encode_slab(_slab: &Slab) -> Vec<u8> {
-    Vec::new()
+fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
+    let bytes = slab.nodes.try_to_vec().unwrap();
+    (bytes, slab.head, slab.free_head)
 }
 
-/// Initialize the market account
 pub fn initialize_market(
     ctx: Context<InitializeMarket>,
     market_nonce: u8,
@@ -35,7 +42,6 @@ pub fn initialize_market(
     Ok(())
 }
 
-/// Place a limit (maker) order
 pub fn place_limit_order(
     ctx: Context<PlaceLimitOrder>,
     price: u64,
@@ -44,21 +50,23 @@ pub fn place_limit_order(
     _reduce_only: bool,
 ) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
-    let mut slab = decode_slab(&ob.slab)?;
+    let mut slab = decode_slab(&ob.slab, ob.head, ob.free_head);
     let key = ob.next_order_id as u128;
     slab.insert(key, price, qty, ctx.accounts.user.key(), side)?;
     ob.next_order_id = ob
         .next_order_id
         .checked_add(1)
         .ok_or(ErrorCode::OrderbookOverflow)?;
-    ob.slab = encode_slab(&slab);
+    let (bytes, head, free_head) = encode_slab(&slab);
+    ob.slab = bytes;
+    ob.head = head;
+    ob.free_head = free_head;
     Ok(())
 }
 
-/// Place a market (taker) order
 pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, side: Side) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
-    let mut slab = decode_slab(&ob.slab)?;
+    let mut slab = decode_slab(&ob.slab, ob.head, ob.free_head);
     let mut remaining = qty;
     while remaining > 0 {
         if let Some(best_idx) = slab.find_best() {
@@ -70,11 +78,13 @@ pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, side: Side) 
             break;
         }
     }
-    ob.slab = encode_slab(&slab);
+    let (bytes, head, free_head) = encode_slab(&slab);
+    ob.slab = bytes;
+    ob.head = head;
+    ob.free_head = free_head;
     Ok(())
 }
 
-/// Settle funding fees
 pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
     let margin = &mut ctx.accounts.margin;
     let fee: u64 = 1;
@@ -83,7 +93,6 @@ pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
     Ok(())
 }
 
-/// Liquidate an under-collateralized account
 pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let margin = &mut ctx.accounts.margin;
     let penalty = margin.collateral / 10;
@@ -92,7 +101,6 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     Ok(())
 }
 
-/// Update risk parameters via DAO authority
 pub fn update_risk_params(ctx: Context<UpdateRiskParams>, new_params: MarketParams) -> Result<()> {
     let m = &mut ctx.accounts.market;
     m.params = new_params;

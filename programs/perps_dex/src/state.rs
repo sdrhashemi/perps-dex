@@ -29,6 +29,8 @@ pub enum Side {
 pub struct OrderbookSide {
     pub market: Pubkey,
     pub side: Side,
+    pub head: u32,
+    pub free_head: u32,
     pub slab: Vec<u8>,
     pub next_order_id: u128,
     pub bump: u8,

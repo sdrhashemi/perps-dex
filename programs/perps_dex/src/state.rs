@@ -5,7 +5,8 @@ pub struct MarketParams {
     pub tick_size: u64,
     pub lot_size: u64,
     pub leverage_limit: u8,
-    pub funding_interval: i64,
+    pub funding_interval: u64,
+    pub maintenance_margin_ratio: u16,
 }
 
 #[account]
@@ -13,7 +14,7 @@ pub struct Market {
     pub authority: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,
-    
+
     pub oracle_pyth: Pubkey,
     pub oracle_switchboard: Pubkey,
     pub params: MarketParams,
@@ -46,6 +47,12 @@ pub struct EventQueue {
     pub bump: u8,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum MarginType {
+    Cross,
+    Isolated,
+}
+
 #[derive(AnchorDeserialize, AnchorSerialize, Clone)]
 #[repr(C)]
 pub struct OrderEvent {
@@ -60,6 +67,7 @@ pub struct OrderEvent {
 pub struct MarginAccount {
     pub owner: Pubkey,
     pub collateral: u64,
+    pub margin_type: MarginType,
     pub positions: Vec<Position>,
     pub bump: u8,
 }
@@ -70,4 +78,5 @@ pub struct Position {
     pub qty: u64,
     pub entry_price: u64,
     pub side: Side,
+    pub collateral: u64,
 }

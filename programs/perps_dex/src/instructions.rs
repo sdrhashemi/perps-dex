@@ -1,7 +1,6 @@
 use crate::state::{EventQueue, MarginAccount, Market, OrderbookSide};
 use anchor_lang::prelude::*;
-use pyth_sdk_solana::state::PriceFeed;
-
+use anchor_spl::token::{Token, TokenAccount};
 
 #[derive(Accounts)]
 #[instruction(market_nonce: u8, params: crate::state::MarketParams)]
@@ -96,13 +95,21 @@ pub struct SettleFunding<'info> {
 pub struct Liquidate<'info> {
     #[account(mut)]
     pub market: Account<'info, Market>,
-
     #[account(mut)]
     pub margin: Account<'info, MarginAccount>,
+    #[account(mut)]
+    pub orderbook_side: Account<'info, OrderbookSide>,
+    #[account(mut)]
+    pub oracle_pyth: AccountInfo<'info>,
+
+    pub liquidator: Signer<'info>,
 
     #[account(mut)]
-    pub liquidator: Signer<'info>,
-    pub token_program: Program<'info, anchor_spl::token::Token>,
+    pub liquidator_collateral_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub collateral_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -112,4 +119,3 @@ pub struct UpdateRiskParams<'info> {
 
     pub authority: Signer<'info>,
 }
-

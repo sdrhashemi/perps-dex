@@ -1,26 +1,31 @@
+use std::u32;
+
+use crate::errors::ErrorCode;
 use crate::state::Side;
 use anchor_lang::prelude::*;
 
 #[repr(C)]
 #[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy)]
 pub struct SlabNode {
-    pub prev: u32,
-    pub next: u32,
     pub key: u128,
     pub price: u64,
     pub qty: u64,
     pub owner: Pubkey,
+    pub inserted_slot: u64,
+    pub prev: Option<u32>,
+    pub next: Option<u32>,
 }
 
 impl Default for SlabNode {
     fn default() -> Self {
-        Self {
-            prev: u32::MAX,
-            next: u32::MAX,
+        SlabNode {
             key: 0,
             price: 0,
             qty: 0,
             owner: Pubkey::default(),
+            inserted_slot: 0,
+            prev: None,
+            next: None,
         }
     }
 }
@@ -33,116 +38,108 @@ pub struct Slab {
 
 impl Slab {
     pub fn new(capacity: usize) -> Self {
-        let mut nodes = vec![SlabNode::default(); capacity];
-        for i in 0..capacity as u32 {
-            nodes[i as usize].next = if i + 1 < capacity as u32 {
-                i + 1
-            } else {
-                u32::MAX
-            };
+        let mut nodes: Vec<SlabNode> = Vec::with_capacity(capacity);
+        nodes.resize_with(capacity, || SlabNode::default());
+        for i in 0..capacity - 1 {
+            nodes[i].next = Some((i + 1) as u32);
         }
-        Slab {
+        nodes[capacity - 1].next = None;
+        Self {
             nodes,
             head: u32::MAX,
             free_head: 0,
         }
     }
 
-    fn alloc_node(&mut self) -> Option<u32> {
+    fn allocate(&mut self) -> Result<u32> {
         let idx = self.free_head;
         if idx == u32::MAX {
-            return None;
+            return Err(error!(ErrorCode::OrderbookOverflow));
         }
-        self.free_head = self.nodes[idx as usize].next;
-        Some(idx)
-    }
-
-    fn dealloc_node(&mut self, idx: u32) {
-        self.nodes[idx as usize] = SlabNode::default();
-        self.nodes[idx as usize].next = self.free_head;
-        self.free_head = idx;
-    }
-
-    pub fn insert(
-        &mut self,
-        key: u128,
-        price: u64,
-        qty: u64,
-        owner: Pubkey,
-        side: Side,
-    ) -> Result<u32> {
-        let idx = self
-            .alloc_node()
-            .ok_or_else(|| error!(crate::errors::ErrorCode::OrderbookOverflow))?;
-
-        if self.head == u32::MAX {
-            self.head = idx;
-            let node = &mut self.nodes[idx as usize];
-            *node = SlabNode {
-                prev: u32::MAX,
-                next: u32::MAX,
-                key,
-                price,
-                qty,
-                owner,
-            };
-            return Ok(idx);
-        }
-
-        let mut cur = self.head;
-        let mut position: (u32, u32) = (u32::MAX, self.head);
-        loop {
-            let cur_node = &self.nodes[cur as usize];
-            let better = match side {
-                Side::Bid => price > cur_node.price,
-                Side::Ask => price < cur_node.price,
-            };
-            if better || (price == cur_node.price && key < cur_node.key) {
-                position = (cur_node.prev, cur);
-                break;
-            }
-            if cur_node.next == u32::MAX {
-                position = (cur, u32::MAX);
-                break;
-            }
-            cur = cur_node.next;
-        }
-
-        let (prev, next) = position;
-        {
-            let node = &mut self.nodes[idx as usize];
-            node.prev = prev;
-            node.next = next;
-            node.key = key;
-            node.price = price;
-            node.qty = qty;
-            node.owner = owner;
-        }
-        if prev != u32::MAX {
-            self.nodes[prev as usize].next = idx;
-        } else {
-            self.head = idx;
-        }
-        if next != u32::MAX {
-            self.nodes[next as usize].prev = idx;
-        }
+        let next_free = self.nodes[idx as usize]
+            .next
+            .ok_or(error!(ErrorCode::OrderbookOverflow))?;
+        self.free_head = next_free;
         Ok(idx)
     }
 
-    pub fn find_best(&self) -> Option<u32> {
-        if self.head == u32::MAX {
-            None
-        } else {
-            Some(self.head)
-        }
+    pub fn insert(&mut self, key: u128, price: u64, qty: u64, owner: Pubkey) -> Result<()> {
+        // 1) Stamp current slot
+        let slot = Clock::get()?.slot;
+        // 2) Allocate a node
+        let idx = self.allocate()?;
+        let node = &mut self.nodes[idx as usize];
+        node.key = key;
+        node.price = price;
+        node.qty = qty;
+        node.owner = owner;
+        node.inserted_slot = slot;
+        node.next = None;
+        node.prev = None;
+        // 3) Link into price-level list
+        self.link_node(idx)
     }
 
-    pub fn reduce_order(&mut self, idx: u32, fill_qty: u64) -> Result<()> {
-        if self.nodes[idx as usize].qty > fill_qty {
-            self.nodes[idx as usize].qty = self.nodes[idx as usize].qty.saturating_sub(fill_qty);
+    pub fn find_best(&self) -> Option<u32> {
+        let best_price = if self.is_bid_side() {
+            self.nodes
+                .iter()
+                .filter(|n| n.qty > 0)
+                .map(|n| n.price)
+                .max()?;
         } else {
-            self.remove(idx)?;
+            self.nodes
+                .iter()
+                .filter(|n| n.qty > 0)
+                .map(|n| n.price)
+                .min()?;
+        };
+
+        let mut candidates: Vec<(u64, u32)> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.price == best_price && n.qty > 0)
+            .map(|(i, n)| (n.inserted_slot, i as u32))
+            .collect();
+
+        candidates.sort_unstable_by_key(|(slot, _)| *slot);
+        candidates.first().map(|(_, idx)| *idx)
+    }
+
+    pub fn is_bid_side(&self) -> bool {
+        true
+    }
+    
+    pub fn reduce_order(&mut self, idx: u32, qty: u64) -> Result<()> {
+        let node = &mut self.nodes[idx as usize];
+        if qty >= node.qty {
+            // remove from linked list
+            if let Some(prev) = node.prev {
+                self.nodes[prev as usize].next = node.next;
+            } else {
+                self.head = node.next.unwrap_or(u32::MAX);
+            }
+            if let Some(next) = node.next {
+                self.nodes[next as usize].prev = node.prev;
+            }
+            // free slot
+            node.next = Some(self.free_head);
+            self.free_head = idx;
+        } else {
+            node.qty = node.qty.saturating_sub(qty);
         }
+        Ok(())
+    }
+
+    fn link_node(&mut self, idx: u32) -> Result<()> {
+        if self.head == u32::MAX {
+            self.head = idx;
+            return Ok(());
+        }
+        self.nodes[idx as usize].next = Some(self.head);
+        self.nodes[self.head as usize].prev = Some(idx);
+        self.head = idx;
         Ok(())
     }
 

@@ -16,4 +16,8 @@ pub enum ErrorCode {
     InvalidPriceFeed,
     #[msg("Stale prices from ocale")]
     StalePrice,
+    #[msg("Invalid healthy account")]
+    HealthyAccount,
+    #[msg("Event serialization failed")]
+    EventSerializationFailure,
 }

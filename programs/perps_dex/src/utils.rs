@@ -3,10 +3,13 @@ use crate::instructions::{
     InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder, SettleFunding, UpdateRiskParams,
 };
 use crate::orderbook::Slab;
-use crate::state::{EventQueue, MarginAccount, Market, MarketParams, OrderEvent, OrderbookSide, Side};
+use crate::state::{
+    EventQueue, MarginAccount, Market, MarketParams, OrderEvent, OrderbookSide, Side,
+};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
+use pyth_sdk_solana::state::SolanaPriceAccount;
 
 fn decode_slab(data: &[u8], head: u32, free_head: u32) -> Slab {
     let node_size = std::mem::size_of::<crate::orderbook::SlabNode>();
@@ -26,7 +29,14 @@ fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
     (bytes, slab.head, slab.free_head)
 }
 
-fn push_event(queue: &mut Account<EventQueue>, event_type: u8, key: u128, price: u64, qty: u64, owner: Pubkey) {
+fn push_event(
+    queue: &mut Account<EventQueue>,
+    event_type: u8,
+    key: u128,
+    price: u64,
+    qty: u64,
+    owner: Pubkey,
+) {
     let event = OrderEvent {
         event_type,
         key,
@@ -76,7 +86,14 @@ pub fn place_limit_order(
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
-    push_event(&mut ctx.accounts.event_queue, 0, key, price, qty, ctx.accounts.user.key());
+    push_event(
+        &mut ctx.accounts.event_queue,
+        0,
+        key,
+        price,
+        qty,
+        ctx.accounts.user.key(),
+    );
     Ok(())
 }
 
@@ -102,10 +119,40 @@ pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side)
 }
 
 pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
+    let price_feed = SolanaPriceAccount::account_info_to_feed(&ctx.accounts.oracle_pyth)
+        .map_err(|_| error!(ErrorCode::InvalidPriceFeed))?;
+    let clock = Clock::get()?;
+    let price_data = price_feed
+        .get_price_no_older_than(clock.unix_timestamp, 60)
+        .ok_or_else(|| error!(ErrorCode::StalePrice))?;
+    let mark_price = price_data.price as i128;
+
     let margin = &mut ctx.accounts.margin;
-    let fee: u64 = 1;
-    require!(margin.collateral >= fee, ErrorCode::InsufficientCollateral);
-    margin.collateral = margin.collateral.saturating_sub(fee);
+    let mut net_funding: i128 = 0;
+    for pos in margin.positions.iter() {
+        let entry = pos.entry_price as i128;
+        let diff = mark_price.saturating_sub(entry);
+        let funding = diff
+            .saturating_mul(pos.qty as i128)
+            .checked_div(entry)
+            .unwrap_or(0);
+        net_funding = match pos.side {
+            Side::Bid => net_funding.saturating_sub(funding),
+            Side::Ask => net_funding.saturating_add(funding),
+        };
+    }
+
+    if net_funding < 0 {
+        let deduct = (-net_funding) as u64;
+        require!(
+            margin.collateral >= deduct,
+            ErrorCode::InsufficientCollateral
+        );
+        margin.collateral = margin.collateral.saturating_sub(deduct);
+    } else {
+        margin.collateral = margin.collateral.saturating_add(net_funding as u64);
+    }
+
     Ok(())
 }
 

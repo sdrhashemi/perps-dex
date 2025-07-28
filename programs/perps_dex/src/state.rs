@@ -13,6 +13,7 @@ pub struct Market {
     pub authority: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,
+    
     pub oracle_pyth: Pubkey,
     pub oracle_switchboard: Pubkey,
     pub params: MarketParams,
@@ -68,4 +69,5 @@ pub struct Position {
     pub key: u128,
     pub qty: u64,
     pub entry_price: u64,
+    pub side: Side,
 }

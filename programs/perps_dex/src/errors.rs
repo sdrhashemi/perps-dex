@@ -12,4 +12,8 @@ pub enum ErrorCode {
     OrderbookOverflow,
     #[msg("Price deviation too large")]
     PriceDeviation,
+    #[msg("Invalid price for pyth")]
+    InvalidPriceFeed,
+    #[msg("Stale prices from ocale")]
+    StalePrice,
 }

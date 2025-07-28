@@ -89,6 +89,7 @@ pub struct SettleFunding<'info> {
     pub oracle_pyth: AccountInfo<'info>,
     #[account(mut)]
     pub oracle_switchboard: AccountInfo<'info>,
+    pub clock: Sysvar<'info, Clock>,
 }
 
 #[derive(Accounts)]
@@ -101,6 +102,8 @@ pub struct Liquidate<'info> {
     pub orderbook_side: Account<'info, OrderbookSide>,
     #[account(mut)]
     pub oracle_pyth: AccountInfo<'info>,
+    #[account(mut)]
+    pub oracle_switch: AccountInfo<'info>,
 
     pub liquidator: Signer<'info>,
 

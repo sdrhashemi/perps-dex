@@ -19,6 +19,8 @@ pub struct Market {
     pub oracle_switchboard: Pubkey,
     pub params: MarketParams,
     pub nonce: u8,
+    pub last_funding_timestamp: i64,
+    pub cumulative_funding_rate: i128,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]

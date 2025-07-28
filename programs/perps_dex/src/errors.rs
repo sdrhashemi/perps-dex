@@ -20,4 +20,6 @@ pub enum ErrorCode {
     HealthyAccount,
     #[msg("Event serialization failed")]
     EventSerializationFailure,
+    #[msg("Overflow hit")]
+    Overflow,
 }

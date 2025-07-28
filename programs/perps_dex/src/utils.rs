@@ -9,25 +9,30 @@ use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
 use anchor_spl::token::{self, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
-use rust_decimal::Decimal;
 use switchboard_on_demand::PullFeedAccountData;
 
-fn decode_slab(data: &[u8], head: u32, free_head: u32) -> Slab {
+const MAX_DEVIATION_BPS: i128 = 50;
+
+pub fn decode_slab(data: &[u8], head: Option<u32>, free_head: Option<u32>, side: Side) -> Slab {
     let node_size = std::mem::size_of::<crate::orderbook::SlabNode>();
     let capacity = data.len() / node_size;
-    let mut slab = Slab::new(capacity);
+    let mut slab = Slab::new(capacity, side);
     let tmp: Vec<crate::orderbook::SlabNode> =
-        <Vec<crate::orderbook::SlabNode> as AnchorDeserialize>::try_from_slice(data)
+        Vec::<crate::orderbook::SlabNode>::try_from_slice(data)
             .unwrap_or_else(|_| vec![crate::orderbook::SlabNode::default(); capacity]);
-    slab.nodes.copy_from_slice(&tmp);
+    slab.nodes.clone_from_slice(&tmp);
     slab.head = head;
     slab.free_head = free_head;
     slab
 }
 
-fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
+pub fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
     let bytes = slab.nodes.try_to_vec().unwrap();
-    (bytes, slab.head, slab.free_head)
+    (
+        bytes,
+        slab.head.unwrap_or_default(),
+        slab.free_head.unwrap_or_default(),
+    )
 }
 fn get_switchboard_price(
     feed_account: &AccountInfo,
@@ -53,15 +58,30 @@ fn get_mark_price(
     max_age: u64,
     max_stale_slots: u64,
     min_samples: u32,
+    
 ) -> Result<i128> {
-    if let Ok(pyth_feed) = SolanaPriceAccount::account_info_to_feed(pyth_account) {
-        let clock = Clock::get()?;
-        if let Some(price_data) = pyth_feed.get_price_no_older_than(clock.unix_timestamp, max_age) {
-            return Ok(price_data.price as i128);
-        }
+    let pyth_feed = SolanaPriceAccount::account_info_to_feed(pyth_account)
+        .map_err(|_| error!(ErrorCode::InvalidPriceFeed))?;
+    let clock = Clock::get()?;
+    let pyth_data = pyth_feed
+        .get_price_no_older_than(clock.unix_timestamp, max_age)
+        .ok_or(error!(ErrorCode::StalePrice))?;
+    let pyth_price = pyth_data.price as i128;
+
+    let sb_price = get_switchboard_price(&switchboard_account, max_stale_slots, min_samples)?;
+
+    let diff = (pyth_price - sb_price).abs();
+    let deviation = if pyth_price != 0 {
+        diff.saturating_mul(10_000.into()) / pyth_price
+    } else {
+        10_000.into()
+    };
+
+    if deviation <= MAX_DEVIATION_BPS {
+        Ok((pyth_price + sb_price) / 2)
+    } else {
+        Ok(pyth_price)
     }
-    let price = get_switchboard_price(&switchboard_account, max_stale_slots, min_samples)?;
-    Ok(price)
 }
 
 fn push_event(
@@ -109,13 +129,13 @@ pub fn place_limit_order(
     ctx: Context<PlaceLimitOrder>,
     price: u64,
     qty: u64,
-    side: Side,
+    _side: Side,
     _reduce_only: bool,
 ) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
-    let mut slab = decode_slab(&ob.slab, ob.head, ob.free_head);
+    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
     let key = ob.next_order_id as u128;
-    slab.insert(key, price, qty, ctx.accounts.user.key(), side)?;
+    slab.insert(key, price, qty, ctx.accounts.user.key())?;
     ob.next_order_id = ob
         .next_order_id
         .checked_add(1)
@@ -137,7 +157,7 @@ pub fn place_limit_order(
 
 pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
-    let mut slab = decode_slab(&ob.slab, ob.head, ob.free_head);
+    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
     let mut remaining = qty;
     while remaining > 0 {
         if let Some(idx) = slab.find_best() {
@@ -168,55 +188,50 @@ pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side)
 }
 
 pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
+    let now = ctx.accounts.clock.unix_timestamp;
     let mut pyth_ai = ctx.accounts.oracle_pyth.to_account_info();
     let mut sb_ai = ctx.accounts.oracle_switchboard.to_account_info();
     let max_age = ctx.accounts.market.params.funding_interval;
     let mark_price = get_mark_price(&mut pyth_ai, &mut sb_ai, max_age, 5, 3)?;
 
     // branch by margin mode
-    let margin = &mut ctx.accounts.margin;
-    match margin.margin_type {
-        // cross margin
+    let m = &mut ctx.accounts.margin;
+    match m.margin_type {
         MarginType::Cross => {
-            let mut net_funding: i128 = 0;
-            for pos in margin.positions.iter() {
-                let entry = pos.entry_price as i128;
-                let diff = mark_price.saturating_sub(entry);
-                let funding = diff
+            let mut net: i128 = 0;
+            for pos in &m.positions {
+                let e = pos.entry_price as i128;
+                let diff = mark_price.saturating_sub(e);
+                let fund = diff
                     .saturating_mul(pos.qty as i128)
-                    .checked_div(entry)
+                    .checked_div(e)
                     .unwrap_or(0);
-                net_funding = match pos.side {
-                    Side::Bid => net_funding.saturating_sub(funding),
-                    Side::Ask => net_funding.saturating_add(funding),
+                net = match pos.side {
+                    Side::Bid => net.saturating_sub(fund),
+                    Side::Ask => net.saturating_add(fund),
                 };
             }
-            if net_funding < 0 {
-                let deduct = (-net_funding) as u64;
-                require!(
-                    margin.collateral >= deduct,
-                    ErrorCode::InsufficientCollateral
-                );
-                margin.collateral = margin.collateral.saturating_sub(deduct);
+            if net < 0 {
+                let d = (-net) as u64;
+                require!(m.collateral >= d, ErrorCode::InsufficientCollateral);
+                m.collateral = m.collateral.saturating_sub(d);
             } else {
-                margin.collateral = margin.collateral.saturating_add(net_funding as u64);
+                m.collateral = m.collateral.saturating_add(net as u64);
             }
         }
-        // isolated margin
         MarginType::Isolated => {
-            for pos in margin.positions.iter_mut() {
-                let entry = pos.entry_price as i128;
-                let diff = mark_price.saturating_sub(entry);
-                let funding_i = diff
+            for pos in &mut m.positions {
+                let e = pos.entry_price as i128;
+                let diff = mark_price.saturating_sub(e);
+                let fund = diff
                     .saturating_mul(pos.qty as i128)
-                    .checked_div(entry)
+                    .checked_div(e)
                     .unwrap_or(0);
                 let delta = if pos.side == Side::Bid {
-                    (funding_i as i128).saturating_neg() as i64 as u64
+                    (fund as i128).saturating_neg() as i64 as u64
                 } else {
-                    funding_i as u64
+                    fund as u64
                 };
-
                 require!(pos.collateral >= delta, ErrorCode::InsufficientCollateral);
                 pos.collateral = pos.collateral.saturating_add(if pos.side == Side::Ask {
                     delta
@@ -226,11 +241,14 @@ pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
             }
         }
     }
+
+    // 4) update timestamp
+    ctx.accounts.market.last_funding_timestamp = now;
     Ok(())
 }
 
 pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
-    let mut price_account = ctx.accounts.oracle_pyth.to_account_info();
+    let mut price_account = ctx.accounts.oracle_pyth.clone();
     let price_feed = SolanaPriceAccount::account_info_to_feed(&mut price_account)
         .map_err(|_| error!(ErrorCode::InvalidPriceFeed))?;
     let clock = Clock::get()?;
@@ -242,88 +260,84 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         .ok_or(error!(ErrorCode::StalePrice))?;
     let mark_price = price_data.price as i128;
 
-    // compute equity & notional
+    // 2) Compute equity & notional
     let margin = &mut ctx.accounts.margin;
     let mut equity: i128 = margin.collateral as i128;
     let mut notional: i128 = 0;
     for pos in margin.positions.iter() {
         let entry = pos.entry_price as i128;
-        let side_sign = match pos.side {
-            Side::Bid => 1,
-            Side::Ask => -1,
-        };
-        let pnl = (mark_price - entry).saturating_mul(pos.qty as i128) * side_sign;
+        let sign = if pos.side == Side::Bid { 1 } else { -1 };
+        let pnl = (mark_price - entry).saturating_mul(pos.qty as i128) * sign;
         equity = equity.saturating_add(pnl);
-        notional = notional.saturating_add(entry.saturating_mul(pos.qty as i128));
+        notional = notional.saturating_add((entry.saturating_mul(pos.qty as i128)).abs());
     }
 
-    // health check
-    let health_ratio = if notional > 0 {
+    // 3) Health check against maintenance margin ratio
+    let health = if notional > 0 {
         equity.saturating_mul(10_000) / notional
     } else {
         0
     };
     let threshold = ctx.accounts.market.params.maintenance_margin_ratio as i128;
-    require!(health_ratio < threshold, ErrorCode::HealthyAccount);
+    require!(health < threshold, ErrorCode::HealthyAccount);
 
-    // unwind positions
+    // 4) Unwind positions via orderbook
     let mut slab = decode_slab(
         &ctx.accounts.orderbook_side.slab,
-        ctx.accounts.orderbook_side.head,
-        ctx.accounts.orderbook_side.free_head,
+        Some(ctx.accounts.orderbook_side.head),
+        Some(ctx.accounts.orderbook_side.free_head),
+        ctx.accounts.orderbook_side.side.clone(),
     );
-    let mut total_proceeds: u64 = 0;
+    let mut total_proceeds: u128 = 0;
     for pos in margin.positions.iter() {
-        let mut remaining = pos.qty;
-        while remaining > 0 {
-            if let Some(idx) = slab.find_best() {
-                let (price, available_qty) = {
-                    let node_ref = &slab.nodes[idx as usize];
-                    (node_ref.price, node_ref.qty)
-                };
-                let trade_qty = remaining.min(available_qty);
-                slab.reduce_order(idx, trade_qty)?;
-                total_proceeds = total_proceeds.saturating_add(
-                    (trade_qty as u128)
-                        .saturating_mul(price as u128)
-                        .try_into()
-                        .unwrap(),
-                );
-                remaining = remaining.saturating_sub(trade_qty);
-            } else {
-                break;
-            }
+        let mut rem = pos.qty;
+        while rem > 0 {
+            let idx = match slab.find_best() {
+                Some(i) => i,
+                None => break,
+            };
+            let (price, available_qty) = {
+                let node_ref = &slab.nodes[idx as usize];
+                (node_ref.price, node_ref.qty)
+            };
+            let trade_qty = rem.min(available_qty);
+            slab.reduce_order(idx, trade_qty)?;
+            total_proceeds =
+                total_proceeds.saturating_add((trade_qty as u128).saturating_mul(price as u128));
+            rem = rem.saturating_sub(trade_qty);
         }
     }
 
-    // re‐persist slab
+    // 5) Persist updated slab
     let (bytes, head, free_head) = encode_slab(&slab);
     let ob = &mut ctx.accounts.orderbook_side;
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
 
-    // collect and distribute fees
-    let fee = total_proceeds / 200; // 0.5%
-    let liquidator_share = fee;
-    let vault_share = total_proceeds.saturating_sub(fee);
+    // 6) Apply 0.5% liquidation penalty
+    let proceeds_u64: u64 = total_proceeds
+        .try_into()
+        .map_err(|_| error!(ErrorCode::Overflow))?;
+    let fee = proceeds_u64 / 200;
+    let liquidator_cut = fee;
+    let vault_cut = proceeds_u64.saturating_sub(fee);
 
-    // transfer the penalty to the liquidator
+    // 7) Transfer liquidator's share
     let cpi_accounts = Transfer {
         from: ctx.accounts.collateral_vault.to_account_info(),
         to: ctx.accounts.liquidator_collateral_account.to_account_info(),
         authority: ctx.accounts.market.to_account_info(),
     };
     let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
-    token::transfer(cpi_ctx, liquidator_share)?;
+    token::transfer(cpi_ctx, liquidator_cut)?;
 
-    // clear positions
+    // 8) Clear positions and remaining collateral
     margin.positions.clear();
-    margin.collateral = vault_share;
+    margin.collateral = vault_cut;
 
     Ok(())
 }
-
 pub fn update_risk_params(ctx: Context<UpdateRiskParams>, new_params: MarketParams) -> Result<()> {
     let m = &mut ctx.accounts.market;
     m.params = new_params;

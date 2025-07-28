@@ -3,7 +3,7 @@ use crate::instructions::{
     InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder, SettleFunding, UpdateRiskParams,
 };
 use crate::orderbook::Slab;
-use crate::state::{EventQueue, MarginAccount, Market, MarketParams, OrderbookSide, Side};
+use crate::state::{EventQueue, MarginAccount, Market, MarketParams, OrderEvent, OrderbookSide, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
@@ -26,6 +26,21 @@ fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
     (bytes, slab.head, slab.free_head)
 }
 
+fn push_event(queue: &mut Account<EventQueue>, event_type: u8, key: u128, price: u64, qty: u64, owner: Pubkey) {
+    let event = OrderEvent {
+        event_type,
+        key,
+        price,
+        qty,
+        owner,
+    };
+    let data = event.try_to_vec().expect("Event serialization failed");
+    queue.events.extend_from_slice(&data);
+    queue.tail = queue.tail.wrapping_add(1);
+    if queue.tail == queue.head {
+        queue.head = queue.head.wrapping_add(1);
+    }
+}
 pub fn initialize_market(
     ctx: Context<InitializeMarket>,
     market_nonce: u8,
@@ -61,10 +76,11 @@ pub fn place_limit_order(
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
+    push_event(&mut ctx.accounts.event_queue, 0, key, price, qty, ctx.accounts.user.key());
     Ok(())
 }
 
-pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, side: Side) -> Result<()> {
+pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
     let mut slab = decode_slab(&ob.slab, ob.head, ob.free_head);
     let mut remaining = qty;

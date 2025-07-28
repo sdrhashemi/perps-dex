@@ -45,10 +45,19 @@ pub struct EventQueue {
     pub bump: u8,
 }
 
+#[derive(AnchorDeserialize, AnchorSerialize, Clone)]
+#[repr(C)]
+pub struct OrderEvent {
+    pub event_type: u8,
+    pub key: u128,
+    pub price: u64,
+    pub qty: u64,
+    pub owner: Pubkey,
+}
+
 #[account]
 pub struct MarginAccount {
-    pub user: Pubkey,
-    pub market: Pubkey,
+    pub owner: Pubkey,
     pub collateral: u64,
     pub positions: Vec<Position>,
     pub bump: u8,
@@ -56,8 +65,7 @@ pub struct MarginAccount {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Position {
-    pub market: Pubkey,
-    pub size: i64,
+    pub key: u128,
+    pub qty: u64,
     pub entry_price: u64,
-    pub last_funding_rate: i64,
 }

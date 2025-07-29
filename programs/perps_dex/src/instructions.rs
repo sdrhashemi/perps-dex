@@ -152,3 +152,27 @@ pub struct WithdrawCollateral<'info> {
     pub user_collateral: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
+
+#[derive(Accounts)]
+pub struct SettleFills<'info> {
+    #[account(mut)]
+    pub market: Account<'info, Market>,
+    #[account(mut)]
+    pub event_queue: Account<'info, EventQueue>,
+    #[account(mut, constraint = market_vault.owner == market.key())]
+    pub market_vault: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [b"margin", market.key().as_ref(), maker.key().as_ref()], bump)]
+    pub maker_margin: Account<'info, MarginAccount>,
+    #[account(mut, constraint = maker_collateral.owner == maker_margin.owner)]
+    pub maker_collateral: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [b"margin", market.key().as_ref(), taker.key().as_ref()], bump)]
+    pub taker_margin: Account<'info, MarginAccount>,
+    #[account(mut, constraint = taker_collateral.owner == taker_margin.owner)]
+    pub taker_collateral: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub orderbook_side: Account<'info, OrderbookSide>,
+
+    pub maker: Signer<'info>,
+    pub taker: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}

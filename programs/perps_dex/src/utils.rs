@@ -1,10 +1,10 @@
 use crate::errors::ErrorCode;
 use crate::instructions::{
-    DepositCollateral, InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder,
+    DepositCollateral, InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder, SettleFills,
     SettleFunding, UpdateRiskParams, WithdrawCollateral,
 };
 use crate::orderbook::Slab;
-use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Side};
+use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
@@ -260,7 +260,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         .ok_or(error!(ErrorCode::StalePrice))?;
     let mark_price = price_data.price as i128;
 
-    // 2) Compute equity & notional
+    // compute equity & notional
     let margin = &mut ctx.accounts.margin;
     let mut equity: i128 = margin.collateral as i128;
     let mut notional: i128 = 0;
@@ -272,7 +272,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         notional = notional.saturating_add((entry.saturating_mul(pos.qty as i128)).abs());
     }
 
-    // 3) Health check against maintenance margin ratio
+    // health check against maintenance margin ratio
     let health = if notional > 0 {
         equity.saturating_mul(10_000) / notional
     } else {
@@ -281,7 +281,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let threshold = ctx.accounts.market.params.maintenance_margin_ratio as i128;
     require!(health < threshold, ErrorCode::HealthyAccount);
 
-    // 4) Unwind positions via orderbook
+    // unwind positions via orderbook
     let mut slab = decode_slab(
         &ctx.accounts.orderbook_side.slab,
         Some(ctx.accounts.orderbook_side.head),
@@ -308,14 +308,14 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         }
     }
 
-    // 5) Persist updated slab
+    // persist updated slab
     let (bytes, head, free_head) = encode_slab(&slab);
     let ob = &mut ctx.accounts.orderbook_side;
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
 
-    // 6) Apply 0.5% liquidation penalty
+    // apply 0.5% liquidation penalty
     let proceeds_u64: u64 = total_proceeds
         .try_into()
         .map_err(|_| error!(ErrorCode::Overflow))?;
@@ -323,7 +323,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let liquidator_cut = fee;
     let vault_cut = proceeds_u64.saturating_sub(fee);
 
-    // 7) Transfer liquidator's share
+    // transfer liquidator's share
     let cpi_accounts = Transfer {
         from: ctx.accounts.collateral_vault.to_account_info(),
         to: ctx.accounts.liquidator_collateral_account.to_account_info(),
@@ -332,7 +332,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
     token::transfer(cpi_ctx, liquidator_cut)?;
 
-    // 8) Clear positions and remaining collateral
+    // clear positions and remaining collateral
     margin.positions.clear();
     margin.collateral = vault_cut;
 
@@ -380,5 +380,65 @@ pub fn withdraw_collateral(ctx: Context<WithdrawCollateral>, amount: u64) -> Res
     let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
     token::transfer(cpi_ctx, amount)?;
 
+    Ok(())
+}
+
+pub fn settle_fills(ctx: Context<SettleFills>) -> Result<()> {
+    const ORDER_EVENT_SIZE: usize = 65;
+    let queue = &mut ctx.accounts.event_queue;
+    while queue.head != queue.tail {
+        let idx = queue.head as usize;
+        let start = idx
+            .checked_mul(ORDER_EVENT_SIZE)
+            .ok_or(error!(ErrorCode::Overflow))?;
+        let end = start
+            .checked_add(ORDER_EVENT_SIZE)
+            .ok_or(error!(ErrorCode::Overflow))?;
+        require!(
+            end <= queue.events.len(),
+            ErrorCode::EventDeserializationFailure
+        );
+        let data = &queue.events[start..end];
+        let ev = OrderEvent::try_from_slice(data)
+            .map_err(|_| error!(ErrorCode::EventDeserializationFailure))?;
+        if ev.event_type == 1 {
+            let amt_u128 = (ev.price as u128)
+                .checked_mul(ev.qty as u128)
+                .ok_or(error!(ErrorCode::Overflow))?;
+            let amt: u64 = amt_u128
+                .try_into()
+                .map_err(|_| error!(ErrorCode::Overflow))?;
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.taker_collateral.to_account_info(),
+                to: ctx.accounts.maker_collateral.to_account_info(),
+                authority: ctx.accounts.taker.to_account_info(),
+            };
+            let cpi_ctx =
+                CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+            token::transfer(cpi_ctx, amt)?;
+            let maker_margin = &mut ctx.accounts.maker_margin;
+            if let Some(pos) = maker_margin.positions.iter_mut().find(|p| p.key == ev.key) {
+                pos.qty = pos.qty.saturating_sub(ev.qty);
+            }
+            let taker_margin = &mut ctx.accounts.taker_margin;
+            let taker_side = if ctx.accounts.orderbook_side.side == Side::Bid {
+                Side::Ask
+            } else {
+                Side::Bid
+            };
+            if let Some(pos) = taker_margin.positions.iter_mut().find(|p| p.key == ev.key) {
+                pos.qty = pos.qty.saturating_add(ev.qty);
+            } else {
+                taker_margin.positions.push(Position {
+                    key: ev.key,
+                    qty: ev.qty,
+                    entry_price: ev.price,
+                    side: taker_side,
+                    collateral: 0,
+                });
+            }
+        }
+        queue.head = queue.head.wrapping_add(1);
+    }
     Ok(())
 }

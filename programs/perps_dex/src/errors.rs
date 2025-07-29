@@ -24,4 +24,6 @@ pub enum ErrorCode {
     Overflow,
     #[msg("Invalid amount for deposit or withdraw")]
     InvalidAmount,
+    #[msg("Failed to deserialize event")]
+    EventDeserializationFailure,
 }

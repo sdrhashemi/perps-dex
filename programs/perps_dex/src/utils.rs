@@ -1,6 +1,7 @@
 use crate::errors::ErrorCode;
 use crate::instructions::{
-    InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder, SettleFunding, UpdateRiskParams,
+    DepositCollateral, InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder,
+    SettleFunding, UpdateRiskParams, WithdrawCollateral,
 };
 use crate::orderbook::Slab;
 use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Side};
@@ -58,7 +59,6 @@ fn get_mark_price(
     max_age: u64,
     max_stale_slots: u64,
     min_samples: u32,
-    
 ) -> Result<i128> {
     let pyth_feed = SolanaPriceAccount::account_info_to_feed(pyth_account)
         .map_err(|_| error!(ErrorCode::InvalidPriceFeed))?;
@@ -341,5 +341,44 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
 pub fn update_risk_params(ctx: Context<UpdateRiskParams>, new_params: MarketParams) -> Result<()> {
     let m = &mut ctx.accounts.market;
     m.params = new_params;
+    Ok(())
+}
+
+pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
+    require!(amount > 0, ErrorCode::InvalidAmount);
+
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.user_collateral.to_account_info(),
+        to: ctx.accounts.market_vault.to_account_info(),
+        authority: ctx.accounts.user.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+    token::transfer(cpi_ctx, amount)?;
+
+    let margin = &mut ctx.accounts.margin;
+    margin.collateral = margin.collateral.saturating_add(amount);
+
+    Ok(())
+}
+
+pub fn withdraw_collateral(ctx: Context<WithdrawCollateral>, amount: u64) -> Result<()> {
+    require!(amount > 0, ErrorCode::InvalidAmount);
+
+    let margin = &mut ctx.accounts.margin;
+    let after = margin
+        .collateral
+        .checked_sub(amount)
+        .ok_or(error!(ErrorCode::InsufficientCollateral))?;
+
+    margin.collateral = after;
+
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.market_vault.to_account_info(),
+        to: ctx.accounts.user_collateral.to_account_info(),
+        authority: ctx.accounts.market.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+    token::transfer(cpi_ctx, amount)?;
+
     Ok(())
 }

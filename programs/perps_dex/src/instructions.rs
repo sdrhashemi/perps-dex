@@ -122,3 +122,33 @@ pub struct UpdateRiskParams<'info> {
 
     pub authority: Signer<'info>,
 }
+
+#[derive(Accounts)]
+pub struct DepositCollateral<'info> {
+    #[account(mut, has_one = authority)]
+    pub market: Account<'info, Market>,
+    pub authority: Signer<'info>,
+    #[account(mut, seeds = [b"margin", market.key().as_ref(), user.key().as_ref()], bump)]
+    pub margin: Account<'info, MarginAccount>,
+    pub user: Signer<'info>,
+    #[account(mut, constraint = user_collateral.owner == user.key())]
+    pub user_collateral: Account<'info, TokenAccount>,
+    #[account(mut, constraint = market_vault.owner == market.key())]
+    pub market_vault: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawCollateral<'info> {
+    #[account(mut, has_one = authority)]
+    pub market: Account<'info, Market>,
+    pub authority: Signer<'info>,
+    #[account(mut, seeds = [b"margin", market.key().as_ref(), user.key().as_ref()], bump)]
+    pub margin: Account<'info, MarginAccount>,
+    pub user: Signer<'info>,
+    #[account(mut, constraint = market_vault.owner == market.key())]
+    pub market_vault: Account<'info, TokenAccount>,
+    #[account(mut, constraint = user_collateral.owner == user.key())]
+    pub user_collateral: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}

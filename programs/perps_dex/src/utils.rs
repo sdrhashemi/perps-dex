@@ -36,6 +36,7 @@ pub fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
         slab.free_head.unwrap_or_default(),
     )
 }
+
 fn get_switchboard_price(
     feed_account: &AccountInfo,
     max_stale_slots: u64,

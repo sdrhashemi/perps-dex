@@ -2,7 +2,7 @@ use crate::state::{
     EventQueue, Governance, MarginAccount, Market, OrderbookSide, Proposal, StakeAccount,
 };
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::token::{ Mint, Token, TokenAccount};
 
 #[derive(Accounts)]
 #[instruction(market_nonce: u8, params: crate::state::MarketParams)]

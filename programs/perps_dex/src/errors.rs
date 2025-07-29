@@ -26,4 +26,8 @@ pub enum ErrorCode {
     InvalidAmount,
     #[msg("Failed to deserialize event")]
     EventDeserializationFailure,
+    #[msg("Proposal has already been executed")]
+    ProposalAlreadyExecuted,
+    #[msg("Proposal has not passed")]
+    ProposalNotPassed,
 }

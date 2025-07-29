@@ -1,14 +1,15 @@
 use crate::errors::ErrorCode;
 use crate::instructions::{
-    DepositCollateral, InitializeMarket, Liquidate, PlaceLimitOrder, PlaceMarketOrder, SettleFills,
-    SettleFunding, UpdateRiskParams, WithdrawCollateral,
+    DepositCollateral, ExecuteProposal, InitializeGovernance, InitializeMarket, Liquidate,
+    PlaceLimitOrder, PlaceMarketOrder, ProposeChange, SettleFills, SettleFunding, Stake,
+    UpdateRiskParams, Vote, WithdrawCollateral,
 };
 use crate::orderbook::Slab;
 use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
-use anchor_spl::token::{self, Transfer};
+use anchor_spl::token::{self, MintTo, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 use switchboard_on_demand::PullFeedAccountData;
 
@@ -109,6 +110,7 @@ fn push_event(
     }
     Ok(())
 }
+
 pub fn initialize_market(
     ctx: Context<InitializeMarket>,
     market_nonce: u8,
@@ -338,6 +340,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
 
     Ok(())
 }
+
 pub fn update_risk_params(ctx: Context<UpdateRiskParams>, new_params: MarketParams) -> Result<()> {
     let m = &mut ctx.accounts.market;
     m.params = new_params;
@@ -440,5 +443,96 @@ pub fn settle_fills(ctx: Context<SettleFills>) -> Result<()> {
         }
         queue.head = queue.head.wrapping_add(1);
     }
+    // clean up the zero-qtys
+    ctx.accounts.maker_margin.positions.retain(|p| p.qty > 0);
+    ctx.accounts.taker_margin.positions.retain(|p| p.qty > 0);
     Ok(())
 }
+
+pub fn initialize_governance(ctx: Context<InitializeGovernance>, total_supply: u64) -> Result<()> {
+    let governance_ai = ctx.accounts.governance.to_account_info();
+
+    let gov = &mut ctx.accounts.governance;
+    gov.authority = ctx.accounts.authority.key();
+    gov.mint = ctx.accounts.governance_mint.key();
+    gov.vault = ctx.accounts.governance_vault.key();
+
+    let cpi_ctx = CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        MintTo {
+            mint: ctx.accounts.governance_mint.to_account_info(),
+            to: ctx.accounts.governance_vault.to_account_info(),
+            authority: governance_ai,
+        },
+    );
+    token::mint_to(
+        cpi_ctx.with_signer(&[&[b"governance", &[gov.bump]]]),
+        total_supply,
+    )?;
+    Ok(())
+}
+
+pub fn stake(ctx: Context<Stake>, amount: u64) -> Result<()> {
+    require!(amount > 0, ErrorCode::InvalidAmount);
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.user_vault.to_account_info(),
+        to: ctx.accounts.governance_vault.to_account_info(),
+        authority: ctx.accounts.user.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+    token::transfer(cpi_ctx, amount)?;
+
+    let st = &mut ctx.accounts.stake_account;
+    st.user = ctx.accounts.user.key();
+    st.amount = st.amount.saturating_add(amount);
+    Ok(())
+}
+
+pub fn propose_change(
+    ctx: Context<ProposeChange>,
+    new_params: MarketParams,
+    description: String,
+) -> Result<()> {
+    let p = &mut ctx.accounts.proposal;
+    p.governance = ctx.accounts.governance.key();
+    p.proposer = ctx.accounts.proposer.key();
+    p.new_params = new_params;
+    p.description = description;
+    p.votes_for = 0;
+    p.votes_against = 0;
+    p.executed = false;
+    Ok(())
+}
+
+pub fn vote(ctx: Context<Vote>, approve: bool) -> Result<()> {
+    let st = &ctx.accounts.stake_account;
+    require!(
+        !ctx.accounts.proposal.executed,
+        ErrorCode::ProposalAlreadyExecuted
+    );
+    if approve {
+        ctx.accounts.proposal.votes_for = ctx
+            .accounts
+            .proposal
+            .votes_for
+            .saturating_add(st.amount as u64);
+    } else {
+        ctx.accounts.proposal.votes_against = ctx
+            .accounts
+            .proposal
+            .votes_against
+            .saturating_add(st.amount as u64);
+    }
+    Ok(())
+}
+
+pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
+    let p = &mut ctx.accounts.proposal;
+    require!(!p.executed, ErrorCode::ProposalAlreadyExecuted);
+    require!(p.votes_for > p.votes_against, ErrorCode::ProposalNotPassed);
+    let gov = &mut ctx.accounts.governance;
+    gov.params = p.new_params.clone();
+    p.executed = true;
+    Ok(())
+}
+

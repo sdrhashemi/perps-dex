@@ -82,3 +82,32 @@ pub struct Position {
     pub side: Side,
     pub collateral: u64,
 }
+
+// Governance State
+
+#[account]
+pub struct Governance {
+    pub authority: Pubkey,
+    pub mint: Pubkey,
+    pub vault: Pubkey,
+    pub bump: u8,
+    pub params: MarketParams,
+}
+
+#[account]
+pub struct StakeAccount {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub bump: u8,
+}
+
+#[account]
+pub struct Proposal {
+    pub governance: Pubkey,
+    pub proposer: Pubkey,
+    pub new_params: MarketParams,
+    pub description: String,
+    pub votes_for: u64,
+    pub votes_against: u64,
+    pub executed: bool,
+}

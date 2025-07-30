@@ -21,6 +21,14 @@ pub mod perps_dex {
         utils::initialize_market(ctx, market_nonce, params)
     }
 
+    pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
+        utils::deposit_collateral(ctx, amount)
+    }
+
+    pub fn withdraw_collateral(ctx: Context<WithdrawCollateral>, amount: u64) -> Result<()> {
+        utils::withdraw_collateral(ctx, amount)
+    }
+
     pub fn place_limit_order(
         ctx: Context<PlaceLimitOrder>,
         price: u64,
@@ -35,8 +43,9 @@ pub mod perps_dex {
         ctx: Context<PlaceMarketOrder>,
         qty: u64,
         side: state::Side,
+        max_slippage_bps: u16,
     ) -> Result<()> {
-        utils::place_market_order(ctx, qty, side)
+        utils::place_market_order(ctx, qty, side, max_slippage_bps)
     }
 
     pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {

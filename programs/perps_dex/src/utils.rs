@@ -9,6 +9,7 @@ use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, S
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
+use anchor_spl::associated_token::spl_associated_token_account::tools::account;
 use anchor_spl::token::{self, MintTo, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 use switchboard_on_demand::PullFeedAccountData;
@@ -135,6 +136,28 @@ pub fn place_limit_order(
     _side: Side,
     _reduce_only: bool,
 ) -> Result<()> {
+    let market = &ctx.accounts.market;
+    let margin = &ctx.accounts.margin;
+
+    let collateral: u128 = margin.collateral as u128;
+    let lev_limit: u128 = market.params.leverage_limit as u128;
+
+    let existing_notional: u128 = margin
+        .positions
+        .iter()
+        .map(|p| (p.entry_price as u128) * (p.qty as u128))
+        .sum();
+
+    let order_notional = (price as u128) * (qty as u128);
+    let total_notional = existing_notional
+        .checked_add(order_notional)
+        .ok_or(error!(ErrorCode::Overflow))?;
+
+    require!(
+        total_notional <= collateral.saturating_mul(lev_limit),
+        ErrorCode::LeverageExceeded
+    );
+
     let ob = &mut ctx.accounts.orderbook_side;
     let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
     let key = ob.next_order_id as u128;
@@ -142,11 +165,12 @@ pub fn place_limit_order(
     ob.next_order_id = ob
         .next_order_id
         .checked_add(1)
-        .ok_or(ErrorCode::OrderbookOverflow)?;
+        .ok_or(error!(ErrorCode::OrderbookOverflow))?;
     let (bytes, head, free_head) = encode_slab(&slab);
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
+
     push_event(
         &mut ctx.accounts.event_queue,
         0,
@@ -155,6 +179,7 @@ pub fn place_limit_order(
         qty,
         ctx.accounts.user.key(),
     )?;
+
     Ok(())
 }
 
@@ -536,4 +561,3 @@ pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
     p.executed = true;
     Ok(())
 }
-

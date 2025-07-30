@@ -30,4 +30,6 @@ pub enum ErrorCode {
     ProposalAlreadyExecuted,
     #[msg("Proposal has not passed")]
     ProposalNotPassed,
+    #[msg("Leverage exceeded")]
+    LeverageExceeded,
 }

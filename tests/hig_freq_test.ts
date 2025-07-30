@@ -17,7 +17,6 @@ import {
   createInitializeAccountInstruction,
 } from "@solana/spl-token";
 
-// Helper: Create PDA-owned token account (not ATA)
 async function createPdaOwnedTokenAccount(
   connection: anchor.web3.Connection,
   payer: Keypair,
@@ -30,7 +29,7 @@ async function createPdaOwnedTokenAccount(
     SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
       newAccountPubkey: newAccount.publicKey,
-      space: 165, // token account size
+      space: 165,
       lamports,
       programId: TOKEN_PROGRAM_ID,
     }),
@@ -45,7 +44,6 @@ describe("High-Frequency Trading Simulation", () => {
   anchor.setProvider(provider);
   const program = anchor.workspace.PerpsDex as Program<PerpsDex>;
 
-  // PDAs
   let marketPda: PublicKey;
   let marketBump: number;
   let orderbookPda: PublicKey;
@@ -55,7 +53,6 @@ describe("High-Frequency Trading Simulation", () => {
   let marginPda: PublicKey;
   let marginBump: number;
 
-  // Token & user
   let mint: PublicKey;
   let marketVault: PublicKey;
   let user: Keypair;
@@ -64,7 +61,6 @@ describe("High-Frequency Trading Simulation", () => {
   const marketNonce = 0;
 
   before(async () => {
-    // Mint
     mint = await createMint(
       provider.connection,
       provider.wallet.payer,
@@ -73,7 +69,6 @@ describe("High-Frequency Trading Simulation", () => {
       6
     );
 
-    // Market PDA
     [marketPda, marketBump] = await PublicKey.findProgramAddressSync(
       [
         Buffer.from("market"),
@@ -84,7 +79,6 @@ describe("High-Frequency Trading Simulation", () => {
       program.programId
     );
 
-    // Vault (token account owned by PDA)
     marketVault = await createPdaOwnedTokenAccount(
       provider.connection,
       provider.wallet.payer,
@@ -92,30 +86,25 @@ describe("High-Frequency Trading Simulation", () => {
       marketPda
     );
 
-    // User setup
     user = Keypair.generate();
     await provider.connection.requestAirdrop(user.publicKey, 1e9);
 
-    // Margin PDA
     [marginPda, marginBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("margin"), marketPda.toBuffer(), user.publicKey.toBuffer()],
       program.programId
     );
 
-    // Orderbook PDA (side=0 bid)
     [orderbookPda, orderbookBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("orderbook"), marketPda.toBuffer(), Buffer.from([0])], // 0 for bid
       program.programId
     );
 
 
-    // Event queue PDA
     [eqPda, eqBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("eventqueue"), marketPda.toBuffer()],
       program.programId
     );
 
-    // User collateral account
     userCollateral = await createAccount(
       provider.connection,
       provider.wallet.payer,
@@ -131,7 +120,6 @@ describe("High-Frequency Trading Simulation", () => {
       1_000_000
     );
 
-    // Initialize market
     await program.methods
       .initializeMarket(marketNonce, {
         tickSize: new anchor.BN(1),
@@ -149,7 +137,6 @@ describe("High-Frequency Trading Simulation", () => {
       } as any)
       .rpc();
 
-    // Initialize margin account
     await program.methods
       .initializeMargin()
       .accounts({
@@ -161,7 +148,6 @@ describe("High-Frequency Trading Simulation", () => {
       .signers([user])
       .rpc();
 
-    // Deposit collateral
     await program.methods
       .depositCollateral(new anchor.BN(1_000_000))
       .accounts({
@@ -176,7 +162,6 @@ describe("High-Frequency Trading Simulation", () => {
       .signers([user])
       .rpc();
 
-    // Initialize orderbook
     await program.methods
       .initializeOrderbook({ bid: {} })
       .accounts({
@@ -187,7 +172,6 @@ describe("High-Frequency Trading Simulation", () => {
       } as any)
       .rpc();
 
-    // Initialize event queue
     await program.methods
       .initializeEventQueue()
       .accounts({
@@ -229,6 +213,6 @@ describe("High-Frequency Trading Simulation", () => {
     const tx = new Transaction().add(...ix);
     await provider.sendAndConfirm(tx, [user]);
 
-    console.log("✅ Batching 10 bids stayed under 200k CU");
+    console.log("Batching 10 bids stayed under 200k CU");
   });
 });

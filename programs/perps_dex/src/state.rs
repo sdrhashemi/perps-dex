@@ -84,7 +84,6 @@ pub struct Position {
 }
 
 // Governance State
-
 #[account]
 pub struct Governance {
     pub authority: Pubkey,

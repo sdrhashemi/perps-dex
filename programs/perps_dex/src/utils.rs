@@ -491,7 +491,7 @@ pub fn settle_fills(ctx: Context<SettleFills>) -> Result<()> {
         }
         queue.head = queue.head.wrapping_add(1);
     }
-    // clean up the zero-qtys
+    
     ctx.accounts.maker_margin.positions.retain(|p| p.qty > 0);
     ctx.accounts.taker_margin.positions.retain(|p| p.qty > 0);
     Ok(())

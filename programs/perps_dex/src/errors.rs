@@ -32,4 +32,8 @@ pub enum ErrorCode {
     ProposalNotPassed,
     #[msg("Leverage exceeded")]
     LeverageExceeded,
+    #[msg("Orderbook is empty")]
+    OrderbookEmpty,
+    #[msg("Slippage exceeded")]
+    SlippageExceeded,
 }

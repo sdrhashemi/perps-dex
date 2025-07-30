@@ -183,9 +183,32 @@ pub fn place_limit_order(
     Ok(())
 }
 
-pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side) -> Result<()> {
+pub fn place_market_order(
+    ctx: Context<PlaceMarketOrder>,
+    qty: u64,
+    _side: Side,
+    max_slippage_bps: u16,
+) -> Result<()> {
+    let ob_read = &ctx.accounts.orderbook_side;
+    let slab_read = decode_slab(
+        &ob_read.slab,
+        Some(ob_read.head),
+        Some(ob_read.free_head),
+        ob_read.side.clone(),
+    );
+    let best_idx = slab_read
+        .find_best()
+        .ok_or(error!(ErrorCode::OrderbookEmpty))?;
+    let best_price = slab_read.nodes[best_idx as usize].price;
+    let allowed = best_price
+        .checked_mul(10_000u64.saturating_add(max_slippage_bps as u64))
+        .ok_or(error!(ErrorCode::Overflow))?
+        .checked_div(10_000)
+        .ok_or(error!(ErrorCode::Overflow))?;
+
     let ob = &mut ctx.accounts.orderbook_side;
     let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
+
     let mut remaining = qty;
     while remaining > 0 {
         if let Some(idx) = slab.find_best() {
@@ -193,6 +216,7 @@ pub fn place_market_order(ctx: Context<PlaceMarketOrder>, qty: u64, _side: Side)
                 let node = &slab.nodes[idx as usize];
                 (node.key, node.price, node.qty, node.owner)
             };
+            require!(price <= allowed, ErrorCode::SlippageExceeded);
             let trade_qty = remaining.min(avail);
             slab.reduce_order(idx, trade_qty)?;
             push_event(

@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-perps_dex = "7k59y4LUVtb9t9kYVKEkQnn7e8JW4BvowLbYsLawAoBs"
+perps_dex = "9zJwyMNo2TriQuVj3d2pfxayqhkdoEYvNThvWjp5n3fN"
 
 [registry]
 url = "https://api.apr.dev"
@@ -17,3 +17,11 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+reset = """
+kill $(lsof -ti:8899) 2>/dev/null || true
+solana-test-validator --reset --quiet &
+sleep 2
+anchor build --skip-lint
+anchor deploy
+yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts
+"""

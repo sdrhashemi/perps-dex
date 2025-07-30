@@ -1,15 +1,15 @@
 use crate::errors::ErrorCode;
 use crate::instructions::{
-    DepositCollateral, ExecuteProposal, InitializeGovernance, InitializeMarket, Liquidate,
-    PlaceLimitOrder, PlaceMarketOrder, ProposeChange, SettleFills, SettleFunding, Stake,
-    UpdateRiskParams, Vote, WithdrawCollateral,
+    DepositCollateral, ExecuteProposal, InitializeEventQueue, InitializeGovernance,
+    InitializeMargin, InitializeMarket, InitializeOrderbook, Liquidate, PlaceLimitOrder,
+    PlaceMarketOrder, ProposeChange, SettleFills, SettleFunding, Stake, UpdateRiskParams, Vote,
+    WithdrawCollateral,
 };
 use crate::orderbook::Slab;
 use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
 use anchor_lang::AnchorSerialize;
-use anchor_spl::associated_token::spl_associated_token_account::tools::account;
 use anchor_spl::token::{self, MintTo, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 use switchboard_on_demand::PullFeedAccountData;
@@ -133,8 +133,6 @@ pub fn place_limit_order(
     ctx: Context<PlaceLimitOrder>,
     price: u64,
     qty: u64,
-    _side: Side,
-    _reduce_only: bool,
 ) -> Result<()> {
     let market = &ctx.accounts.market;
     let margin = &ctx.accounts.margin;
@@ -583,5 +581,37 @@ pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
     let gov = &mut ctx.accounts.governance;
     gov.params = p.new_params.clone();
     p.executed = true;
+    Ok(())
+}
+
+pub fn initialize_orderbook(ctx: Context<InitializeOrderbook>, side: Side) -> Result<()> {
+    let ob = &mut ctx.accounts.orderbook_side;
+    ob.market = ctx.accounts.market.key();
+    ob.side = side;
+    ob.slab = Vec::new();
+    ob.head = 0;
+    ob.free_head = 0;
+    ob.next_order_id = 0;
+    ob.bump = ctx.bumps.orderbook_side;
+    Ok(())
+}
+
+pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> {
+    let eq = &mut ctx.accounts.event_queue;
+    eq.market = ctx.accounts.market.key();
+    eq.head = 0;
+    eq.tail = 0;
+    eq.events = Vec::new();
+    eq.bump = ctx.bumps.event_queue;
+    Ok(())
+}
+
+pub fn initialize_margin(ctx: Context<InitializeMargin>) -> Result<()> {
+    let m = &mut ctx.accounts.margin;
+    m.owner = ctx.accounts.user.key();
+    m.collateral = 0;
+    m.margin_type = MarginType::Cross;
+    m.positions = Vec::new();
+    m.bump = ctx.bumps.margin;
     Ok(())
 }

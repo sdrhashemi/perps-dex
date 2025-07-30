@@ -5,7 +5,7 @@ pub mod state;
 pub mod utils;
 use anchor_lang::prelude::*;
 
-declare_id!("7k59y4LUVtb9t9kYVKEkQnn7e8JW4BvowLbYsLawAoBs");
+declare_id!("9zJwyMNo2TriQuVj3d2pfxayqhkdoEYvNThvWjp5n3fN");
 
 use instructions::*;
 
@@ -20,6 +20,19 @@ pub mod perps_dex {
     ) -> Result<()> {
         utils::initialize_market(ctx, market_nonce, params)
     }
+    pub fn initialize_orderbook(
+        ctx: Context<InitializeOrderbook>,
+        side: state::Side,
+    ) -> Result<()> {
+        utils::initialize_orderbook(ctx, side)
+    }
+
+    pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> {
+        utils::initialize_event_queue(ctx)
+    }
+    pub fn initialize_margin(ctx: Context<InitializeMargin>) -> Result<()> {
+        utils::initialize_margin(ctx)
+    }
 
     pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
         utils::deposit_collateral(ctx, amount)
@@ -29,14 +42,8 @@ pub mod perps_dex {
         utils::withdraw_collateral(ctx, amount)
     }
 
-    pub fn place_limit_order(
-        ctx: Context<PlaceLimitOrder>,
-        price: u64,
-        qty: u64,
-        side: state::Side,
-        reduce_only: bool,
-    ) -> Result<()> {
-        utils::place_limit_order(ctx, price, qty, side, reduce_only)
+    pub fn place_limit_order(ctx: Context<PlaceLimitOrder>, price: u64, qty: u64) -> Result<()> {
+        utils::place_limit_order(ctx, price, qty)
     }
 
     pub fn place_market_order(

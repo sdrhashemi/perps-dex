@@ -23,7 +23,7 @@ pub struct Market {
     pub cumulative_funding_rate: i128,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Copy)]
 pub enum Side {
     Bid,
     Ask,

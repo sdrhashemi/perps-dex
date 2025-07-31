@@ -1,6 +1,6 @@
-use anchor_lang::prelude::*;
 use crate::errors::ErrorCode;
 use crate::state::Side;
+use anchor_lang::prelude::*;
 
 #[derive(Clone, AnchorSerialize, AnchorDeserialize, Default)]
 pub struct SlabNode {
@@ -22,13 +22,19 @@ pub struct Slab {
 
 impl Slab {
     pub fn new(capacity: usize, side: Side) -> Self {
+        assert!(capacity > 0, "Slab capacity must be > 0");
         let mut nodes = Vec::with_capacity(capacity);
         nodes.resize_with(capacity, || SlabNode::default());
         for i in 0..capacity - 1 {
             nodes[i].next = Some((i + 1) as u32);
         }
         nodes[capacity - 1].next = None;
-        Self { nodes, head: None, free_head: Some(0), side }
+        Self {
+            nodes,
+            head: None,
+            free_head: Some(0),
+            side,
+        }
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -84,14 +90,25 @@ impl Slab {
     pub fn find_best(&self) -> Option<u32> {
         let mut best_price: Option<u64> = None;
         for n in &self.nodes {
-            if n.qty == 0 { continue; }
+            if n.qty == 0 {
+                continue;
+            }
             best_price = Some(match best_price {
                 None => n.price,
-                Some(bp) => if self.side == Side::Bid { bp.max(n.price) } else { bp.min(n.price) },
+                Some(bp) => {
+                    if self.side == Side::Bid {
+                        bp.max(n.price)
+                    } else {
+                        bp.min(n.price)
+                    }
+                }
             });
         }
         let price = best_price?;
-        let mut cand: Vec<(u64, u32)> = self.nodes.iter().enumerate()
+        let mut cand: Vec<(u64, u32)> = self
+            .nodes
+            .iter()
+            .enumerate()
             .filter(|(_, n)| n.qty > 0 && n.price == price)
             .map(|(i, n)| (n.inserted_slot, i as u32))
             .collect();

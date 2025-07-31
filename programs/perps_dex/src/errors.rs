@@ -36,4 +36,6 @@ pub enum ErrorCode {
     OrderbookEmpty,
     #[msg("Slippage exceeded")]
     SlippageExceeded,
+    #[msg("Invalid orderbook side")]
+    InvalidOrderbookSide,
 }

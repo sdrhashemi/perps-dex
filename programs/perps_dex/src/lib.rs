@@ -11,6 +11,7 @@ use instructions::*;
 
 #[program]
 pub mod perps_dex {
+
     use super::*;
 
     pub fn initialize_market(
@@ -42,8 +43,13 @@ pub mod perps_dex {
         utils::withdraw_collateral(ctx, amount)
     }
 
-    pub fn place_limit_order(ctx: Context<PlaceLimitOrder>, price: u64, qty: u64) -> Result<()> {
-        utils::place_limit_order(ctx, price, qty)
+    pub fn place_limit_order(
+        ctx: Context<PlaceLimitOrder>,
+        side: state::Side,
+        price: u64,
+        qty: u64,
+    ) -> Result<()> {
+        utils::place_limit_order(ctx, side, price, qty)
     }
 
     pub fn place_market_order(

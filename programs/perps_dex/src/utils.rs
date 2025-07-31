@@ -18,7 +18,19 @@ const MAX_DEVIATION_BPS: i128 = 50;
 
 pub fn decode_slab(data: &[u8], head: Option<u32>, free_head: Option<u32>, side: Side) -> Slab {
     let node_size = std::mem::size_of::<crate::orderbook::SlabNode>();
-    let capacity = data.len() / node_size;
+    let capacity = if node_size == 0 {
+        0
+    } else {
+        data.len() / node_size
+    };
+    if capacity == 0 {
+        return Slab {
+            nodes: Vec::new(),
+            head: None,
+            free_head: None,
+            side,
+        };
+    }
     let mut slab = Slab::new(capacity, side);
     let tmp: Vec<crate::orderbook::SlabNode> =
         Vec::<crate::orderbook::SlabNode>::try_from_slice(data)
@@ -131,9 +143,12 @@ pub fn initialize_market(
 
 pub fn place_limit_order(
     ctx: Context<PlaceLimitOrder>,
+    side: Side,
     price: u64,
     qty: u64,
 ) -> Result<()> {
+    let ob = &mut ctx.accounts.orderbook_side;
+    ob.side = side;
     let market = &ctx.accounts.market;
     let margin = &ctx.accounts.margin;
 
@@ -156,7 +171,6 @@ pub fn place_limit_order(
         ErrorCode::LeverageExceeded
     );
 
-    let ob = &mut ctx.accounts.orderbook_side;
     let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
     let key = ob.next_order_id as u128;
     slab.insert(key, price, qty, ctx.accounts.user.key())?;
@@ -491,7 +505,7 @@ pub fn settle_fills(ctx: Context<SettleFills>) -> Result<()> {
         }
         queue.head = queue.head.wrapping_add(1);
     }
-    
+
     ctx.accounts.maker_margin.positions.retain(|p| p.qty > 0);
     ctx.accounts.taker_margin.positions.retain(|p| p.qty > 0);
     Ok(())
@@ -584,15 +598,16 @@ pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
     Ok(())
 }
 
-pub fn initialize_orderbook(ctx: Context<InitializeOrderbook>, side: Side) -> Result<()> {
+pub fn initialize_orderbook(ctx: Context<InitializeOrderbook>, side: Side, capacity: usize) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
     ob.market = ctx.accounts.market.key();
     ob.side = side;
-    ob.slab = Vec::new();
+    ob.bump = ctx.bumps.orderbook_side;
+    ob.slab = Slab::new(capacity, side);
     ob.head = 0;
     ob.free_head = 0;
-    ob.next_order_id = 0;
-    ob.bump = ctx.bumps.orderbook_side;
+    ob.next_order_id = 1;
+    
     Ok(())
 }
 

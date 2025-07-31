@@ -2,7 +2,7 @@ use crate::state::{
     EventQueue, Governance, MarginAccount, Market, OrderbookSide, Proposal, Side, StakeAccount,
 };
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount};
+use anchor_spl::token::Token;
 
 #[derive(Accounts)]
 #[instruction(market_nonce: u8, params: crate::state::MarketParams)]
@@ -130,8 +130,10 @@ pub struct SettleFunding<'info> {
     pub market: Account<'info, Market>,
     #[account(mut)]
     pub margin: Account<'info, MarginAccount>,
+    /// CHECK:
     #[account(mut)]
     pub oracle_pyth: AccountInfo<'info>,
+    /// CHECK:
     #[account(mut)]
     pub oracle_switchboard: AccountInfo<'info>,
     pub clock: Sysvar<'info, Clock>,
@@ -145,8 +147,10 @@ pub struct Liquidate<'info> {
     pub margin: Account<'info, MarginAccount>,
     #[account(mut)]
     pub orderbook_side: Account<'info, OrderbookSide>,
+    /// CHECK:
     #[account(mut)]
     pub oracle_pyth: AccountInfo<'info>,
+    /// CHECK:
     #[account(mut)]
     pub oracle_switch: AccountInfo<'info>,
     pub liquidator: Signer<'info>,

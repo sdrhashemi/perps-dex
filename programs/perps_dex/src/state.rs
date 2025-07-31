@@ -25,8 +25,8 @@ pub struct Market {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Copy)]
 pub enum Side {
-    Bid,
-    Ask,
+    Bid = 0,
+    Ask = 1,
 }
 
 #[account]

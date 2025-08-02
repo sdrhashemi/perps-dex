@@ -38,4 +38,12 @@ pub enum ErrorCode {
     SlippageExceeded,
     #[msg("Invalid orderbook side")]
     InvalidOrderbookSide,
+    #[msg("Invalid capacity for orderbook")]
+    InvalidSlabCapcity,
+    #[msg("Invalid quantity for order")]
+    InvalidQuantity,
+    #[msg("Invalid index")]
+    InvalidIndex,
+    #[msg("Invalid slab data")]
+    InvalidSlabData,
 }

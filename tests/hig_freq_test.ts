@@ -368,7 +368,7 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       .rpc();
 
     await program.methods
-      .initializeOrderbook({ bid: {} })
+      .initializeOrderbook(0, 100)
       .accounts({
         orderbookSide: orderbookPda,
         market: marketPda,

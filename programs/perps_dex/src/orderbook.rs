@@ -21,11 +21,16 @@ pub struct Slab {
 }
 
 impl Slab {
-    pub fn new(capacity: usize, side: Side) -> Result<Self> {
+    pub fn new(capacity: usize, side: u8) -> Result<Self> {
         require!(
             capacity > 0 && capacity <= 10000,
             ErrorCode::InvalidSlabCapcity
         );
+        let side_enum = match side {
+            0 => Side::Bid,
+            1 => Side::Ask,
+            _ => return Err(error!(ErrorCode::InvalidOrderbookSide)),
+        };
         let mut nodes = Vec::with_capacity(capacity);
         nodes.resize_with(capacity, || SlabNode::default());
         for i in 0..capacity - 1 {
@@ -36,7 +41,7 @@ impl Slab {
             nodes,
             head: None,
             free_head: Some(0),
-            side,
+            side: side_enum,
         })
     }
 
@@ -168,8 +173,8 @@ impl Slab {
 
 pub fn decode_slab(
     slab: &[u8],
-    head: Option<u64>,
-    free_head: Option<u64>,
+    head: Option<u32>,
+    free_head: Option<u32>,
     side: Side,
 ) -> Result<Slab> {
     let node_size = std::mem::size_of::<SlabNode>();
@@ -191,14 +196,10 @@ pub fn decode_slab(
     })
 }
 
-pub fn encode_slab(slab: &Slab) -> Result<(Vec<u8>, u64, u64)> {
+pub fn encode_slab(slab: &Slab) -> Result<(Vec<u8>, u32, u32)> {
     let mut bytes = Vec::with_capacity(slab.nodes.len() * std::mem::size_of::<SlabNode>());
     for node in &slab.nodes {
         node.serialize(&mut bytes)?;
     }
-    Ok((
-        bytes,
-        slab.head.unwrap_or(0) as u64,
-        slab.free_head.unwrap_or(0) as u64,
-    ))
+    Ok((bytes, slab.head.unwrap_or(0), slab.free_head.unwrap_or(0)))
 }

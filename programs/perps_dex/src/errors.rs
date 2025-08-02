@@ -46,4 +46,8 @@ pub enum ErrorCode {
     InvalidIndex,
     #[msg("Invalid slab data")]
     InvalidSlabData,
+    #[msg("Uninitialized orderbook")]
+    UninitializedOrderbook,
+    #[msg("Invalid capacity for orderbook")]
+    InvalidOrderbookCapacity,
 }

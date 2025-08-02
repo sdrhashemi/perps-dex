@@ -5,7 +5,7 @@ use crate::instructions::{
     PlaceMarketOrder, ProposeChange, SettleFills, SettleFunding, Stake, UpdateRiskParams, Vote,
     WithdrawCollateral,
 };
-use crate::orderbook::Slab;
+use crate::orderbook::{decode_slab, encode_slab, Slab};
 use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
@@ -15,40 +15,6 @@ use pyth_sdk_solana::state::SolanaPriceAccount;
 use switchboard_on_demand::PullFeedAccountData;
 
 const MAX_DEVIATION_BPS: i128 = 50;
-
-pub fn decode_slab(data: &[u8], head: Option<u32>, free_head: Option<u32>, side: Side) -> Slab {
-    let node_size = std::mem::size_of::<crate::orderbook::SlabNode>();
-    let capacity = if node_size == 0 {
-        0
-    } else {
-        data.len() / node_size
-    };
-    if capacity == 0 {
-        return Slab {
-            nodes: Vec::new(),
-            head: None,
-            free_head: None,
-            side,
-        };
-    }
-    let mut slab = Slab::new(capacity, side);
-    let tmp: Vec<crate::orderbook::SlabNode> =
-        Vec::<crate::orderbook::SlabNode>::try_from_slice(data)
-            .unwrap_or_else(|_| vec![crate::orderbook::SlabNode::default(); capacity]);
-    slab.nodes.clone_from_slice(&tmp);
-    slab.head = head;
-    slab.free_head = free_head;
-    slab
-}
-
-pub fn encode_slab(slab: &Slab) -> (Vec<u8>, u32, u32) {
-    let bytes = slab.nodes.try_to_vec().unwrap();
-    (
-        bytes,
-        slab.head.unwrap_or_default(),
-        slab.free_head.unwrap_or_default(),
-    )
-}
 
 fn get_switchboard_price(
     feed_account: &AccountInfo,
@@ -148,20 +114,26 @@ pub fn place_limit_order(
     qty: u64,
 ) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
-    ob.side = side;
+
+    require!(ob.side == side, ErrorCode::InvalidOrderbookSide);
+
     let market = &ctx.accounts.market;
     let margin = &ctx.accounts.margin;
+    let clock = Clock::get()?;
 
-    let collateral: u128 = margin.collateral as u128;
-    let lev_limit: u128 = market.params.leverage_limit as u128;
+    let collateral = margin.collateral as u128;
+    let lev_limit = market.params.leverage_limit as u128;
+    let order_notional = (price as u128)
+        .checked_mul(qty as u128)
+        .ok_or(error!(ErrorCode::Overflow))?;
 
-    let existing_notional: u128 = margin
-        .positions
-        .iter()
-        .map(|p| (p.entry_price as u128) * (p.qty as u128))
-        .sum();
+    let existing_notional: u128 = margin.positions.iter().try_fold(0u128, |acc, p| {
+        (p.entry_price as u128)
+            .checked_mul(p.qty as u128)
+            .and_then(|notional| acc.checked_add(notional))
+            .ok_or(error!(ErrorCode::Overflow))
+    })?;
 
-    let order_notional = (price as u128) * (qty as u128);
     let total_notional = existing_notional
         .checked_add(order_notional)
         .ok_or(error!(ErrorCode::Overflow))?;
@@ -171,14 +143,15 @@ pub fn place_limit_order(
         ErrorCode::LeverageExceeded
     );
 
-    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
+    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side)?;
     let key = ob.next_order_id as u128;
-    slab.insert(key, price, qty, ctx.accounts.user.key())?;
+    slab.insert(key, price, qty, ctx.accounts.user.key(), clock.slot)?;
+
     ob.next_order_id = ob
         .next_order_id
         .checked_add(1)
         .ok_or(error!(ErrorCode::OrderbookOverflow))?;
-    let (bytes, head, free_head) = encode_slab(&slab);
+    let (bytes, head, free_head) = encode_slab(&slab)?;
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
@@ -206,8 +179,8 @@ pub fn place_market_order(
         &ob_read.slab,
         Some(ob_read.head),
         Some(ob_read.free_head),
-        ob_read.side.clone(),
-    );
+        ob_read.side,
+    )?;
     let best_idx = slab_read
         .find_best()
         .ok_or(error!(ErrorCode::OrderbookEmpty))?;
@@ -219,7 +192,7 @@ pub fn place_market_order(
         .ok_or(error!(ErrorCode::Overflow))?;
 
     let ob = &mut ctx.accounts.orderbook_side;
-    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side.clone());
+    let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side)?;
 
     let mut remaining = qty;
     while remaining > 0 {
@@ -244,7 +217,7 @@ pub fn place_market_order(
             break;
         }
     }
-    let (bytes, head, free_head) = encode_slab(&slab);
+    let (bytes, head, free_head) = encode_slab(&slab)?;
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
@@ -350,8 +323,8 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         &ctx.accounts.orderbook_side.slab,
         Some(ctx.accounts.orderbook_side.head),
         Some(ctx.accounts.orderbook_side.free_head),
-        ctx.accounts.orderbook_side.side.clone(),
-    );
+        ctx.accounts.orderbook_side.side,
+    )?;
     let mut total_proceeds: u128 = 0;
     for pos in margin.positions.iter() {
         let mut rem = pos.qty;
@@ -373,7 +346,7 @@ pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
     }
 
     // persist updated slab
-    let (bytes, head, free_head) = encode_slab(&slab);
+    let (bytes, head, free_head) = encode_slab(&slab)?;
     let ob = &mut ctx.accounts.orderbook_side;
     ob.slab = bytes;
     ob.head = head;
@@ -598,16 +571,31 @@ pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
     Ok(())
 }
 
-pub fn initialize_orderbook(ctx: Context<InitializeOrderbook>, side: Side, capacity: usize) -> Result<()> {
-    let ob = &mut ctx.accounts.orderbook_side;
-    ob.market = ctx.accounts.market.key();
-    ob.side = side;
-    ob.bump = ctx.bumps.orderbook_side;
-    ob.slab = Slab::new(capacity, side);
-    ob.head = 0;
-    ob.free_head = 0;
-    ob.next_order_id = 1;
-    
+pub fn initialize_orderbook(
+    ctx: Context<InitializeOrderbook>,
+    side: u8,
+    capacity: usize,
+) -> Result<()> {
+    // require!(side == 0 || side == 1, ErrorCode::InvalidOrderbookSide);
+    require!(
+        capacity > 0 && capacity <= 10000,
+        ErrorCode::InvalidOrderbookCapacity
+    );
+    let orderbook_side = &mut ctx.accounts.orderbook_side;
+    orderbook_side.market = ctx.accounts.market.key();
+    orderbook_side.side = match side {
+        0 => Side::Bid,
+        1 => Side::Ask,
+        _ => return Err(error!(ErrorCode::InvalidOrderbookSide)),
+    };
+    orderbook_side.next_order_id = 1;
+    orderbook_side.bump = ctx.bumps.orderbook_side;
+    let slab = Slab::new(capacity, side)?;
+    let (bytes, head, free_head) = encode_slab(&slab)?;
+    orderbook_side.slab = bytes;
+    orderbook_side.head = head;
+    orderbook_side.free_head = free_head;
+
     Ok(())
 }
 

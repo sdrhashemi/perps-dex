@@ -23,9 +23,10 @@ pub mod perps_dex {
     }
     pub fn initialize_orderbook(
         ctx: Context<InitializeOrderbook>,
-        side: state::Side,
+        side: u8,
+        capacity: u32,
     ) -> Result<()> {
-        utils::initialize_orderbook(ctx, side)
+        utils::initialize_orderbook(ctx, side, capacity as usize)
     }
 
     pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> {

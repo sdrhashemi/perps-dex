@@ -1,13 +1,27 @@
+pub mod collateral;
 pub mod errors;
 pub mod instructions;
+pub mod liquidate_engine;
+pub mod market;
+pub mod order;
 pub mod orderbook;
+pub mod settles;
+pub mod slab;
 pub mod state;
 pub mod utils;
+pub mod dao;
 use anchor_lang::prelude::*;
 
 declare_id!("7k59y4LUVtb9t9kYVKEkQnn7e8JW4BvowLbYsLawAoBs");
 
+use collateral::*;
 use instructions::*;
+use liquidate_engine::*;
+use market::*;
+use order::*;
+use orderbook::*;
+use settles::*;
+use dao::*;
 
 #[program]
 pub mod perps_dex {
@@ -19,14 +33,14 @@ pub mod perps_dex {
         market_nonce: u8,
         params: state::MarketParams,
     ) -> Result<()> {
-        utils::initialize_market(ctx, market_nonce, params)
+        market::initialize_market(ctx, market_nonce, params)
     }
     pub fn initialize_orderbook(
         ctx: Context<InitializeOrderbook>,
         side: u8,
         capacity: u32,
     ) -> Result<()> {
-        utils::initialize_orderbook(ctx, side, capacity)
+        orderbook::initialize_orderbook(ctx, side, capacity)
     }
 
     pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> {
@@ -37,11 +51,11 @@ pub mod perps_dex {
     }
 
     pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
-        utils::deposit_collateral(ctx, amount)
+        collateral::deposit_collateral(ctx, amount)
     }
 
     pub fn withdraw_collateral(ctx: Context<WithdrawCollateral>, amount: u64) -> Result<()> {
-        utils::withdraw_collateral(ctx, amount)
+        collateral::withdraw_collateral(ctx, amount)
     }
 
     pub fn place_limit_order(
@@ -50,7 +64,7 @@ pub mod perps_dex {
         price: u64,
         qty: u64,
     ) -> Result<()> {
-        utils::place_limit_order(ctx, side, price, qty)
+        order::place_limit_order(ctx, side, price, qty)
     }
 
     pub fn place_market_order(
@@ -59,15 +73,15 @@ pub mod perps_dex {
         side: state::Side,
         max_slippage_bps: u16,
     ) -> Result<()> {
-        utils::place_market_order(ctx, qty, side, max_slippage_bps)
+        order::place_market_order(ctx, qty, side, max_slippage_bps)
     }
 
     pub fn settle_funding(ctx: Context<SettleFunding>) -> Result<()> {
-        utils::settle_funding(ctx)
+        settles::settle_funding(ctx)
     }
 
-    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
-        utils::liquidate(ctx)
+    pub fn liquidate(ctx: Context<LiquidateEngine>) -> Result<()> {
+        liquidate_engine::liquidate(ctx)
     }
 
     pub fn update_risk_params(

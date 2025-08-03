@@ -1,3 +1,4 @@
+use crate::orderbook::SlabNode;
 use crate::state::{
     EventQueue, Governance, MarginAccount, Market, OrderbookSide, Proposal, Side, StakeAccount,
 };
@@ -24,14 +25,14 @@ pub struct InitializeMarket<'info> {
     pub system_program: Program<'info, System>,
 }
 #[derive(Accounts)]
-#[instruction(side: Side)]
+#[instruction(side: u8, capacity: u32)]
 pub struct InitializeOrderbook<'info> {
     #[account(
         init,
         payer = authority,
-        seeds = [b"orderbook", market.key().as_ref(), &[side as u8]],
-        bump,
-        space = 8 + std::mem::size_of::<OrderbookSide>(),
+        space = 8 + 58 + 4 + (capacity as usize * std::mem::size_of::<SlabNode>()),
+        seeds = [b"orderbook", market.key().as_ref(), &[side]],
+        bump
     )]
     pub orderbook_side: Account<'info, OrderbookSide>,
     pub market: Account<'info, Market>,
@@ -39,6 +40,8 @@ pub struct InitializeOrderbook<'info> {
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
+
+const MAX_EVENTS: usize = 256;
 
 #[derive(Accounts)]
 #[instruction()]
@@ -48,7 +51,7 @@ pub struct InitializeEventQueue<'info> {
         payer = authority,
         seeds = [b"eventqueue", market.key().as_ref()],
         bump,
-        space = 8 + std::mem::size_of::<EventQueue>(),
+        space = 8 + 5000,
     )]
     pub event_queue: Account<'info, EventQueue>,
     pub market: Account<'info, Market>,

@@ -23,7 +23,7 @@ pub struct Market {
     pub cumulative_funding_rate: i128,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Copy)]
+#[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone, PartialEq, Eq, Copy)]
 pub enum Side {
     Bid = 0,
     Ask = 1,
@@ -48,6 +48,7 @@ pub struct EventQueue {
     pub events: Vec<u8>,
     pub bump: u8,
 }
+
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
 pub enum MarginType {

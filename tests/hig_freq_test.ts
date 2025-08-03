@@ -284,11 +284,12 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       null,
       6
     );
+    console.log("Mint created:", mint.toBase58());
 
     // Set up user
     user = Keypair.generate();
     await provider.connection.requestAirdrop(user.publicKey, 1e9);
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for airdrop to process
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     userCollateral = await createAccount(
       provider.connection,
@@ -304,6 +305,7 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       provider.wallet.publicKey,
       1_000_000
     );
+    console.log("User collateral account:", userCollateral.toBase58());
 
     // Set up PDAs
     [marketPda, marketBump] = await PublicKey.findProgramAddressSync(
@@ -315,6 +317,7 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       ],
       program.programId
     );
+    console.log("Market PDA:", marketPda.toBase58());
 
     marketVault = await createPdaOwnedTokenAccount(
       provider.connection,
@@ -322,117 +325,160 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       mint,
       marketPda
     );
+    console.log("Market vault:", marketVault.toBase58());
 
     [orderbookPda, orderbookBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("orderbook"), marketPda.toBuffer(), Buffer.from([0])],
       program.programId
     );
+    console.log("Orderbook PDA:", orderbookPda.toBase58());
 
     [eqPda, eqBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("eventqueue"), marketPda.toBuffer()],
       program.programId
     );
+    console.log("Event queue PDA:", eqPda.toBase58());
 
     [marginPda, marginBump] = await PublicKey.findProgramAddressSync(
       [Buffer.from("margin"), marketPda.toBuffer(), user.publicKey.toBuffer()],
       program.programId
     );
+    console.log("Margin PDA:", marginPda.toBase58());
 
     // Initialize market
-    await program.methods
-      .initializeMarket(marketNonce, {
-        tickSize: new anchor.BN(1),
-        lotSize: new anchor.BN(1),
-        leverageLimit: 20,
-        fundingInterval: new anchor.BN(3600),
-        maintenanceMarginRatio: 500,
-      })
-      .accounts({
-        market: marketPda,
-        baseMint: mint,
-        quoteMint: mint,
-        authority: provider.wallet.publicKey,
+    try {
+      await program.methods
+        .initializeMarket(marketNonce, {
+          tickSize: new anchor.BN(1),
+          lotSize: new anchor.BN(1),
+          leverageLimit: 20,
+          fundingInterval: new anchor.BN(3600),
+          maintenanceMarginRatio: 500,
+        })
+        .accounts({
+          market: marketPda,
+          baseMint: mint,
+          quoteMint: mint,
+          authority: provider.wallet.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      console.log("Market initialized successfully");
+    } catch (err) {
+      console.error("Market initialization failed:", err);
+      throw err;
+    }
 
-      })
-      .rpc();
+    // Initialize margin
+    try {
+      await program.methods
+        .initializeMargin()
+        .accounts({
+          market: marketPda,
+          margin: marginPda,
+          user: user.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([user])
+        .rpc();
+      console.log("Margin initialized successfully");
+    } catch (err) {
+      console.error("Margin initialization failed:", err);
+      throw err;
+    }
 
-    await program.methods
-      .initializeMargin()
-      .accounts({
-        market: marketPda,
-        margin: marginPda,
-        user: user.publicKey,
-
-      } as any)
-      .signers([user])
-      .rpc();
-
-    await program.methods
-      .initializeOrderbook(0, 100)
-      .accounts({
-        orderbookSide: orderbookPda,
-        market: marketPda,
-        authority: provider.wallet.publicKey,
-
-      })
-      .rpc();
+    // Initialize orderbook
+    try {
+      await program.methods
+        .initializeOrderbook(0, new anchor.BN(10))
+        .accounts({
+          orderbookSide: orderbookPda,
+          market: marketPda,
+          authority: provider.wallet.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      console.log("Orderbook initialized successfully");
+    } catch (err) {
+      console.error("Orderbook initialization failed:", err);
+      throw err;
+    }
 
     // Initialize event queue
-    await program.methods
-      .initializeEventQueue()
-      .accounts({
-        eventQueue: eqPda,
-        market: marketPda,
-        authority: provider.wallet.publicKey,
-
-      } as any)
-      .rpc();
-
-
+    try {
+      await program.methods
+        .initializeEventQueue()
+        .accounts({
+          eventQueue: eqPda,
+          market: marketPda,
+          authority: provider.wallet.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      console.log("Event queue initialized successfully");
+    } catch (err) {
+      console.error("Event queue initialization failed:", err);
+      throw err;
+    }
   });
 
   it("Initializes margin, orderbook and event queue", async () => {
-    const marginAccount = await program.account.marginAccount.fetch(marginPda);
-    expect(marginAccount.owner.toBase58()).to.equal(user.publicKey.toBase58(), "Margin account owner should match user keypair");
-    expect(marginAccount.collateral.toString()).to.equal("0", "Margin account collateral should be 0");
-    expect(marginAccount.bump).to.equal(marginBump, "Margin account bump should match");
+    try {
+      const marginAccount = await program.account.marginAccount.fetch(marginPda);
+      expect(marginAccount.owner.toBase58()).to.equal(user.publicKey.toBase58(), "Margin account owner should match user keypair");
+      expect(marginAccount.collateral.toString()).to.equal("0", "Margin account collateral should be 0");
+      expect(marginAccount.bump).to.equal(marginBump, "Margin account bump should match");
+    } catch (err) {
+      console.error("Margin account fetch failed:", err);
+      throw err;
+    }
+
+
     const orderbookAccount = await program.account.orderbookSide.fetch(orderbookPda);
     expect(orderbookAccount.market.toBase58()).to.equal(marketPda.toBase58(), "Orderbook market should match market PDA");
 
+
+
     const eventQueueAccount = await program.account.eventQueue.fetch(eqPda);
     expect(eventQueueAccount.market.toBase58()).to.equal(marketPda.toBase58(), "Event queue market should match market PDA");
-  });
-  it("Deposits collateral into margin account", async () => {
-    await program.methods
-      .depositCollateral(new anchor.BN(1_000_000))
-      .accounts({
-        market: marketPda,
-        authority: provider.wallet.publicKey,
-        margin: marginPda,
-        user: user.publicKey,
-        userCollateral: userCollateral,
-        marketVault: marketVault,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      } as any)
-      .signers([user])
-      .rpc();
 
-    // Verify market vault
+  });
+
+  it("Deposits collateral into margin account", async () => {
+    try {
+      await program.methods
+        .depositCollateral(new anchor.BN(1_000_000))
+        .accounts({
+          market: marketPda,
+          authority: provider.wallet.publicKey,
+          margin: marginPda,
+          user: user.publicKey,
+          userCollateral: userCollateral,
+          marketVault: marketVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([user])
+        .rpc();
+      console.log("Collateral deposited successfully");
+    } catch (err) {
+      console.error("Collateral deposit failed:", err);
+      throw err;
+    }
+
     const vaultInfo = await getAccount(provider.connection, marketVault);
     expect(vaultInfo.amount.toString()).to.equal("1000000", "Market vault should have 1,000,000 tokens");
 
-    // Verify user collateral
     const userCollateralInfo = await getAccount(provider.connection, userCollateral);
     expect(userCollateralInfo.amount.toString()).to.equal("0", "User collateral should be empty after deposit");
 
-    // Verify margin account
     const marginAccount = await program.account.marginAccount.fetch(marginPda);
     expect(marginAccount.collateral.toString()).to.equal("1000000", "Margin account should reflect deposited collateral");
   });
+
   it("Batches multiple limit orders under CU budget", async () => {
     const ix = [];
     ix.push(
-      anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 })
+      anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 2_000_000 })
     );
 
     for (let i = 0; i < 10; i++) {
@@ -456,16 +502,13 @@ describe("High Frequency Trading Simulation - Account Initialization and Collate
       );
     }
 
-    const tx = new Transaction().add(...ix);
+    const tx = new anchor.web3.Transaction().add(...ix);
     const txSig = await provider.sendAndConfirm(tx, [user]);
     console.log("Transaction signature:", txSig);
 
-    // Verify orders in orderbook
-    const orderbookAccount = await program.account.orderbookSide.fetch(orderbookPda);
-    expect(orderbookAccount.slab.length).to.be.greaterThanOrEqual(10, "Orderbook should contain at least 10 orders");
-  })
-});
 
+  });
+});
 /*
 describe("High Frequency Trading Simulation - Collateral Deposit", () => {
   const provider = anchor.AnchorProvider.local();

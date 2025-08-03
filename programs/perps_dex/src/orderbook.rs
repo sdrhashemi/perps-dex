@@ -2,7 +2,10 @@ use crate::errors::ErrorCode;
 use crate::state::Side;
 use anchor_lang::prelude::*;
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
+pub const SLAB_NODE_SERIALIZED_SIZE: usize = std::mem::size_of::<SlabNode>();
+
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, Default)]
+#[repr(C)]
 pub struct SlabNode {
     pub key: u128,
     pub price: u64,
@@ -65,32 +68,39 @@ impl Slab {
         slot: u64,
     ) -> Result<()> {
         require!(qty > 0, ErrorCode::InvalidQuantity);
-        let idx = self.allocate()?;
 
+        // Take a node from the free list
+        let idx = self.free_head.ok_or(error!(ErrorCode::OrderbookFull))? as usize;
+
+        require!(idx < self.nodes.len(), ErrorCode::InvalidIndex);
+
+        // Remove from free list
+        self.free_head = self.nodes[idx].next;
+
+        // Find correct position in the sorted linked list
         let mut current = self.head;
         let mut prev: Option<u32> = None;
         while let Some(curr_idx) = current {
             require!(curr_idx < self.nodes.len() as u32, ErrorCode::InvalidIndex);
             let curr_price = self.nodes[curr_idx as usize].price;
             let curr_slot = self.nodes[curr_idx as usize].inserted_slot;
+
             let should_insert = match self.side {
                 Side::Bid => price > curr_price || (price == curr_price && slot < curr_slot),
                 Side::Ask => price < curr_price || (price == curr_price && slot < curr_slot),
             };
+
             if should_insert {
                 break;
             }
+
             prev = current;
             current = self.nodes[curr_idx as usize].next;
         }
 
+        // Fill node data
         {
-            let (left, right) = self.nodes.split_at_mut(idx as usize);
-            let node = if idx == 0 {
-                &mut left[0]
-            } else {
-                &mut right[0]
-            };
+            let node = &mut self.nodes[idx];
             node.key = key;
             node.price = price;
             node.qty = qty;
@@ -100,33 +110,20 @@ impl Slab {
             node.next = current;
         }
 
+        // Update prev link
         if let Some(prev_idx) = prev {
-            require!(prev_idx < self.nodes.len() as u32, ErrorCode::InvalidIndex);
-            let (prev_left, prev_right) = self.nodes.split_at_mut(prev_idx as usize);
-            let prev_node = if prev_idx == 0 {
-                &mut prev_left[0]
-            } else {
-                &mut prev_right[0]
-            };
-            prev_node.next = Some(idx);
+            self.nodes[prev_idx as usize].next = Some(idx as u32);
         } else {
-            self.head = Some(idx);
+            self.head = Some(idx as u32);
         }
 
+        // Update next link
         if let Some(next_idx) = current {
-            require!(next_idx < self.nodes.len() as u32, ErrorCode::InvalidIndex);
-            let (next_left, next_right) = self.nodes.split_at_mut(next_idx as usize);
-            let next_node = if next_idx == 0 {
-                &mut next_left[0]
-            } else {
-                &mut next_right[0]
-            };
-            next_node.prev = Some(idx);
+            self.nodes[next_idx as usize].prev = Some(idx as u32);
         }
 
         Ok(())
     }
-
     pub fn reduce_order(&mut self, idx: u32, qty: u64) -> Result<()> {
         require!(idx < self.nodes.len() as u32, ErrorCode::InvalidIndex);
         require!(qty > 0, ErrorCode::InvalidQuantity);
@@ -177,29 +174,41 @@ pub fn decode_slab(
     free_head: Option<u32>,
     side: Side,
 ) -> Result<Slab> {
-    let node_size = std::mem::size_of::<SlabNode>();
-    let capacity = slab.len() / node_size;
-    require!(slab.len() % node_size == 0, ErrorCode::InvalidSlabData);
-    let mut nodes = Vec::with_capacity(capacity);
-    for i in 0..capacity {
-        let start = i * node_size;
-        let end = start + node_size;
-        let node_data = &slab[start..end];
-        let node = SlabNode::deserialize(&mut &node_data[..])?;
+    msg!(
+        "Decoding slab: len={}, head={:?}, free_head={:?}, side={:?}",
+        slab.len(),
+        head,
+        free_head,
+        side
+    );
+
+    let mut remaining: &[u8] = slab; // mutable reference to slice
+    let mut nodes = Vec::new();
+
+    while !remaining.is_empty() {
+        let node = SlabNode::deserialize(&mut remaining)?; // this consumes from `remaining`
         nodes.push(node);
     }
+
+    msg!("Decoded slab: capacity={}", nodes.len());
+
     Ok(Slab {
         nodes,
-        head: head.map(|h| h as u32),
-        free_head: free_head.map(|f| f as u32),
+        head,
+        free_head,
         side,
     })
 }
 
 pub fn encode_slab(slab: &Slab) -> Result<(Vec<u8>, u32, u32)> {
-    let mut bytes = Vec::with_capacity(slab.nodes.len() * std::mem::size_of::<SlabNode>());
-    for node in &slab.nodes {
-        node.serialize(&mut bytes)?;
+    msg!("Encoding slab: nodes_len={}", slab.nodes.len());
+
+    let mut bytes = Vec::new();
+    for (i, node) in slab.nodes.iter().enumerate() {
+        msg!("Serializing node {}: key={}", i, node.key);
+        let node_bytes = node.try_to_vec()?; // Borsh serialization
+        bytes.extend_from_slice(&node_bytes);
     }
+
     Ok((bytes, slab.head.unwrap_or(0), slab.free_head.unwrap_or(0)))
 }

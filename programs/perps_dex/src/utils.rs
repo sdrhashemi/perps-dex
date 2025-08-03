@@ -5,7 +5,7 @@ use crate::instructions::{
     PlaceMarketOrder, ProposeChange, SettleFills, SettleFunding, Stake, UpdateRiskParams, Vote,
     WithdrawCollateral,
 };
-use crate::orderbook::{decode_slab, encode_slab, Slab};
+use crate::orderbook::{decode_slab, encode_slab, Slab, SlabNode};
 use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent, Position, Side};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorDeserialize;
@@ -115,7 +115,14 @@ pub fn place_limit_order(
 ) -> Result<()> {
     let ob = &mut ctx.accounts.orderbook_side;
 
+    msg!(
+        "Starting place_limit_order: side={:?}, price={}, qty={}",
+        side,
+        price,
+        qty
+    );
     require!(ob.side == side, ErrorCode::InvalidOrderbookSide);
+    require!(!ob.slab.is_empty(), ErrorCode::UninitializedOrderbook);
 
     let market = &ctx.accounts.market;
     let margin = &ctx.accounts.margin;
@@ -144,6 +151,7 @@ pub fn place_limit_order(
     );
 
     let mut slab = decode_slab(&ob.slab, Some(ob.head), Some(ob.free_head), ob.side)?;
+    require!(!slab.nodes.is_empty(), ErrorCode::UninitializedOrderbook);
     let key = ob.next_order_id as u128;
     slab.insert(key, price, qty, ctx.accounts.user.key(), clock.slot)?;
 
@@ -155,6 +163,13 @@ pub fn place_limit_order(
     ob.slab = bytes;
     ob.head = head;
     ob.free_head = free_head;
+
+    msg!(
+        "Placed limit order: key={}, price={}, qty={}",
+        key,
+        price,
+        qty
+    );
 
     push_event(
         &mut ctx.accounts.event_queue,
@@ -574,11 +589,17 @@ pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
 pub fn initialize_orderbook(
     ctx: Context<InitializeOrderbook>,
     side: u8,
-    capacity: usize,
+    capacity: u32,
 ) -> Result<()> {
     // require!(side == 0 || side == 1, ErrorCode::InvalidOrderbookSide);
+    msg!(
+        "Starting initialize_orderbook: side={}, capacity={}",
+        side,
+        capacity
+    );
+    msg!("SlabNode size: {}", std::mem::size_of::<SlabNode>());
     require!(
-        capacity > 0 && capacity <= 10000,
+        capacity > 0 && capacity <= 140,
         ErrorCode::InvalidOrderbookCapacity
     );
     let orderbook_side = &mut ctx.accounts.orderbook_side;
@@ -588,13 +609,48 @@ pub fn initialize_orderbook(
         1 => Side::Ask,
         _ => return Err(error!(ErrorCode::InvalidOrderbookSide)),
     };
-    orderbook_side.next_order_id = 1;
+    orderbook_side.next_order_id = 1u128;
     orderbook_side.bump = ctx.bumps.orderbook_side;
-    let slab = Slab::new(capacity, side)?;
+    orderbook_side.head = 0;
+    orderbook_side.free_head = 0;
+    let mut nodes = Vec::with_capacity(capacity as usize);
+    for i in 0..capacity {
+        nodes.push(SlabNode {
+            key: 0,
+            price: 0,
+            qty: 0,
+            owner: Pubkey::default(),
+            inserted_slot: 0,
+            next: if i + 1 < capacity {
+                Some((i + 1) as u32)
+            } else {
+                None
+            },
+            prev: if i > 0 { Some((i - 1) as u32) } else { None },
+        });
+    }
+
+    let slab = Slab {
+        nodes,
+        head: None,
+        free_head: Some(0),
+        side: orderbook_side.side,
+    };
     let (bytes, head, free_head) = encode_slab(&slab)?;
+    require!(!bytes.is_empty(), ErrorCode::UninitializedOrderbook);
+
     orderbook_side.slab = bytes;
-    orderbook_side.head = head;
-    orderbook_side.free_head = free_head;
+    orderbook_side.head = head as u32;
+    orderbook_side.free_head = free_head as u32;
+
+    msg!("Initialized orderbook side: {:?}", orderbook_side.side);
+
+    msg!(
+        "Head: {}, Free Head: {}, Next Order ID: {}",
+        orderbook_side.head,
+        orderbook_side.free_head,
+        orderbook_side.next_order_id
+    );
 
     Ok(())
 }

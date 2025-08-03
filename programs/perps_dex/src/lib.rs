@@ -26,7 +26,7 @@ pub mod perps_dex {
         side: u8,
         capacity: u32,
     ) -> Result<()> {
-        utils::initialize_orderbook(ctx, side, capacity as usize)
+        utils::initialize_orderbook(ctx, side, capacity)
     }
 
     pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> {

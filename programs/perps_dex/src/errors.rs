@@ -50,4 +50,5 @@ pub enum ErrorCode {
     UninitializedOrderbook,
     #[msg("Invalid capacity for orderbook")]
     InvalidOrderbookCapacity,
+    OrderbookFull,
 }

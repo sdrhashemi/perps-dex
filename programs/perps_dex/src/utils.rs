@@ -1,7 +1,7 @@
 use crate::errors::ErrorCode;
-use crate::instructions::{InitializeEventQueue, InitializeMargin, UpdateRiskParams};
+use crate::instructions::{InitializeEventQueue, UpdateRiskParams};
 
-use crate::state::{EventQueue, MarginType, MarketParams, OrderEvent};
+use crate::state::{EventQueue, MarketParams, OrderEvent};
 use anchor_lang::prelude::*;
 use anchor_lang::AnchorSerialize;
 use pyth_sdk_solana::state::SolanaPriceAccount;
@@ -97,15 +97,5 @@ pub fn initialize_event_queue(ctx: Context<InitializeEventQueue>) -> Result<()> 
     eq.tail = 0;
     eq.events = Vec::new();
     eq.bump = ctx.bumps.event_queue;
-    Ok(())
-}
-
-pub fn initialize_margin(ctx: Context<InitializeMargin>) -> Result<()> {
-    let m = &mut ctx.accounts.margin;
-    m.owner = ctx.accounts.user.key();
-    m.collateral = 0;
-    m.margin_type = MarginType::Cross;
-    m.positions = Vec::new();
-    m.bump = ctx.bumps.margin;
     Ok(())
 }

@@ -18,26 +18,7 @@ pub struct InitializeEventQueue<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Accounts)]
-#[instruction()]
-pub struct InitializeMargin<'info> {
-    #[account(mut)]
-    pub market: Account<'info, Market>,
 
-    #[account(
-      init,
-      payer = user,
-      seeds = [b"margin", market.key().as_ref(), user.key().as_ref()],
-      bump,
-      space = 8 + std::mem::size_of::<MarginAccount>(),
-    )]
-    pub margin: Account<'info, MarginAccount>,
-
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-}
 
 #[derive(Accounts)]
 pub struct UpdateRiskParams<'info> {

@@ -1,7 +1,9 @@
 pub mod collateral;
+pub mod dao;
 pub mod errors;
 pub mod instructions;
 pub mod liquidate_engine;
+pub mod margin;
 pub mod market;
 pub mod order;
 pub mod orderbook;
@@ -9,7 +11,6 @@ pub mod settles;
 pub mod slab;
 pub mod state;
 pub mod utils;
-pub mod dao;
 use anchor_lang::prelude::*;
 
 declare_id!("7k59y4LUVtb9t9kYVKEkQnn7e8JW4BvowLbYsLawAoBs");
@@ -17,11 +18,11 @@ declare_id!("7k59y4LUVtb9t9kYVKEkQnn7e8JW4BvowLbYsLawAoBs");
 use collateral::*;
 use instructions::*;
 use liquidate_engine::*;
+use margin::*;
 use market::*;
 use order::*;
 use orderbook::*;
 use settles::*;
-use dao::*;
 
 #[program]
 pub mod perps_dex {
@@ -47,7 +48,7 @@ pub mod perps_dex {
         utils::initialize_event_queue(ctx)
     }
     pub fn initialize_margin(ctx: Context<InitializeMargin>) -> Result<()> {
-        utils::initialize_margin(ctx)
+        margin::initialize_margin(ctx)
     }
 
     pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
